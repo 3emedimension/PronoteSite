@@ -1763,10 +1763,16 @@ def add_no_cache_headers(response):
     return response
 
 
+# Initialisation base
 with app.app_context():
     init_db()
 
-
+# Lancement serveur
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+    app.run(
+        host="0.0.0.0",
+        port=port,
+        debug=False,
+        use_reloader=False
+    )
