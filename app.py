@@ -12,7 +12,7 @@ app.config["SESSION_PERMANENT"] = False
 app.config["TEMPLATES_AUTO_RELOAD"] = False
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-DB_NAME = "mini_pronote_v3.db"
+DB_NAME = "mini_pronote_v4.db"
 ADMIN_DEFAULT_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Azsqerfd2012")
 
 
@@ -567,33 +567,60 @@ def register():
       <form method='post' autocomplete='off'>
         <label>Nom complet</label>
         <input name='full_name' required>
+
         <label>Nom d'utilisateur</label>
         <input name='username' required>
+
         <label>Mot de passe</label>
         <input type='password' name='password' required>
+
         <label>Type de compte</label>
-        <select name='role' required>
+        <select name='role' id='role_select' required onchange='toggleRegisterFields()'>
           <option value='eleve'>Élève</option>
           <option value='prof'>Professeur</option>
           <option value='parent'>Parent</option>
         </select>
-        <label>Classe (élève / professeur)</label>
-        <select name='class_id'>
-          <option value=''>Aucune</option>
-          {% for c in classes %}
-            <option value='{{ c.id }}'>{{ c.name }}</option>
-          {% endfor %}
-        </select>
-        <label>Enfant lié (si parent)</label>
-        <select name='child_id'>
-          <option value=''>Aucun</option>
-          {% for s in students %}
-            <option value='{{ s.id }}'>{{ s.full_name }}</option>
-          {% endfor %}
-        </select>
+
+        <div id='class_block'>
+          <label>Classe (élève / professeur)</label>
+          <select name='class_id'>
+            <option value=''>Aucune</option>
+            {% for c in classes %}
+              <option value='{{ c.id }}'>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div id='child_block' style='display:none;'>
+          <label>Enfant lié (si parent)</label>
+          <select name='child_id'>
+            <option value=''>Aucun</option>
+            {% for s in students %}
+              <option value='{{ s.id }}'>{{ s.full_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
         <button type='submit'>Créer le compte</button>
       </form>
     </div>
+
+    <script>
+      function toggleRegisterFields() {
+        const role = document.getElementById('role_select').value;
+        const classBlock = document.getElementById('class_block');
+        const childBlock = document.getElementById('child_block');
+
+        if (role === 'parent') {
+          classBlock.style.display = 'none';
+          childBlock.style.display = 'block';
+        } else {
+          classBlock.style.display = 'block';
+          childBlock.style.display = 'none';
+        }
+      }
+      toggleRegisterFields();
+    </script>
     """
     return render_page(content, title="Créer un compte", classes=classes, students=students)
 
@@ -648,14 +675,14 @@ def dashboard():
             "Notes saisies": query_one("SELECT COUNT(*) AS total FROM grades WHERE teacher_id = ?", (user["id"],))["total"],
             "Devoirs publiés": query_one("SELECT COUNT(*) AS total FROM homework WHERE teacher_id = ?", (user["id"],))["total"],
             "Messages reçus": query_one("SELECT COUNT(*) AS total FROM messages WHERE receiver_id = ?", (user["id"],))["total"],
-            "Élèves": query_one("SELECT COUNT(*) AS total FROM users WHERE role='eleve'", ())["total"],
+            "Élèves": query_one("SELECT COUNT(*) AS total FROM users WHERE role='eleve'", ())['total'],
         }
     else:
         stats = {
-            "Utilisateurs": query_one("SELECT COUNT(*) AS total FROM users", ())["total"],
-            "Classes": query_one("SELECT COUNT(*) AS total FROM classes", ())["total"],
-            "Notes": query_one("SELECT COUNT(*) AS total FROM grades", ())["total"],
-            "Messages": query_one("SELECT COUNT(*) AS total FROM messages", ())["total"],
+            "Utilisateurs": query_one("SELECT COUNT(*) AS total FROM users", ())['total'],
+            "Classes": query_one("SELECT COUNT(*) AS total FROM classes", ())['total'],
+            "Notes": query_one("SELECT COUNT(*) AS total FROM grades", ())['total'],
+            "Messages": query_one("SELECT COUNT(*) AS total FROM messages", ())['total'],
         }
 
     latest_messages = query_all(
@@ -1347,9 +1374,11 @@ def manage_users():
         if not username or not password or not full_name or role not in ["admin", "prof", "eleve", "parent"]:
             flash("Champs invalides.")
             return redirect(url_for("manage_users"))
+
         if user["role"] == "prof" and role == "admin":
             flash("Un professeur ne peut pas créer un compte admin.")
             return redirect(url_for("manage_users"))
+
         if role == "parent" and not child_id:
             flash("Un parent doit être lié à un élève.")
             return redirect(url_for("manage_users"))
@@ -1386,34 +1415,58 @@ def manage_users():
         <form method='post' autocomplete='off'>
           <label>Nom complet</label>
           <input name='full_name' required>
+
           <label>Nom d'utilisateur</label>
           <input name='username' required>
+
           <label>Mot de passe</label>
           <input name='password' required>
+
           <label>Rôle</label>
-          <select name='role' required>
+          <select name='role' id='manage_role_select' required onchange='toggleManageFields()'>
             <option value='eleve'>Élève</option>
             <option value='prof'>Professeur</option>
             <option value='parent'>Parent</option>
             {% if user.role == 'admin' %}<option value='admin'>Admin</option>{% endif %}
           </select>
-          <label>Classe</label>
-          <select name='class_id'>
-            <option value=''>Aucune</option>
-            {% for c in classes %}<option value='{{ c.id }}'>{{ c.name }}</option>{% endfor %}
-          </select>
-          <label>Enfant lié (si parent)</label>
-          <select name='child_id'>
-            <option value=''>Aucun</option>
-            {% for s in students %}<option value='{{ s.id }}'>{{ s.full_name }}</option>{% endfor %}
-          </select>
+
+          <div id='manage_class_block'>
+            <label>Classe</label>
+            <select name='class_id'>
+              <option value=''>Aucune</option>
+              {% for c in classes %}
+                <option value='{{ c.id }}'>{{ c.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div id='manage_child_block' style='display:none;'>
+            <label>Enfant lié (si parent)</label>
+            <select name='child_id'>
+              <option value=''>Aucun</option>
+              {% for s in students %}
+                <option value='{{ s.id }}'>{{ s.full_name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
           <button type='submit'>Créer</button>
         </form>
       </div>
+
       <div class='card'>
         <h2>Liste des utilisateurs</h2>
         <table>
-          <thead><tr><th>ID</th><th>Nom</th><th>Utilisateur</th><th>Rôle</th><th>Classe</th><th>Enfant lié</th></tr></thead>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Nom</th>
+              <th>Utilisateur</th>
+              <th>Rôle</th>
+              <th>Classe</th>
+              <th>Enfant lié</th>
+            </tr>
+          </thead>
           <tbody>
             {% for u in users %}
               <tr>
@@ -1429,6 +1482,23 @@ def manage_users():
         </table>
       </div>
     </div>
+
+    <script>
+      function toggleManageFields() {
+        const role = document.getElementById('manage_role_select').value;
+        const classBlock = document.getElementById('manage_class_block');
+        const childBlock = document.getElementById('manage_child_block');
+
+        if (role === 'parent') {
+          classBlock.style.display = 'none';
+          childBlock.style.display = 'block';
+        } else {
+          classBlock.style.display = 'block';
+          childBlock.style.display = 'none';
+        }
+      }
+      toggleManageFields();
+    </script>
     """
     return render_page(content, title="Comptes", users=users, user=user, classes=classes, students=students)
 
