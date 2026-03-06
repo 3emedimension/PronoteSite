@@ -40,7 +40,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL,
-            role TEXT NOT NULL CHECK(role IN ('admin', 'prof', 'eleve')),
+            role TEXT NOT NULL CHECK(role IN ('admin', 'prof', 'eleve', 'parent')),
             full_name TEXT NOT NULL,
             class_id INTEGER,
             FOREIGN KEY(class_id) REFERENCES classes(id)
@@ -1395,6 +1395,7 @@ with app.app_context():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
 
 
 
