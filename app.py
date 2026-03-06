@@ -12,7 +12,7 @@ app.config["SESSION_PERMANENT"] = False
 app.config["TEMPLATES_AUTO_RELOAD"] = False
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-DB_NAME = "mini_pronote_v4.db"
+DB_NAME = "mini_pronote_v5.db"
 ADMIN_DEFAULT_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Azsqerfd2012")
 
 
@@ -76,8 +76,10 @@ def init_db():
             full_name TEXT NOT NULL,
             class_id INTEGER,
             child_id INTEGER,
+            child_id_2 INTEGER,
             FOREIGN KEY(class_id) REFERENCES classes(id),
-            FOREIGN KEY(child_id) REFERENCES users(id)
+            FOREIGN KEY(child_id) REFERENCES users(id),
+            FOREIGN KEY(child_id_2) REFERENCES users(id)
         )
     """)
 
@@ -168,6 +170,8 @@ def init_db():
     # Migration légère si une ancienne base existe déjà
     if not table_has_column("users", "child_id"):
         execute_db("ALTER TABLE users ADD COLUMN child_id INTEGER")
+    if not table_has_column("users", "child_id_2"):
+        execute_db("ALTER TABLE users ADD COLUMN child_id_2 INTEGER")
 
     cur_classes = query_one("SELECT COUNT(*) AS total FROM classes")
     if cur_classes["total"] == 0:
@@ -194,12 +198,12 @@ def init_db():
     admin_hash = generate_password_hash(ADMIN_DEFAULT_PASSWORD)
     if not admin_user:
         execute_db(
-            "INSERT INTO users (username, password, role, full_name, class_id, child_id) VALUES (?, ?, ?, ?, NULL, NULL)",
+            "INSERT INTO users (username, password, role, full_name, class_id, child_id, child_id_2) VALUES (?, ?, ?, ?, NULL, NULL, NULL)",
             ("admin", admin_hash, "admin", "Administrateur"),
         )
     else:
         execute_db(
-            "UPDATE users SET password = ?, role = 'admin', full_name = 'Administrateur' WHERE username = 'admin'",
+            "UPDATE users SET password = ?, role = 'admin', full_name = 'Administrateur', child_id = NULL, child_id_2 = NULL WHERE username = 'admin'",
             (admin_hash,),
         )
 
@@ -216,14 +220,9 @@ def load_logged_user():
 
     user = query_one(
         """
-        SELECT u.*, c.name AS class_name,
-               child.full_name AS child_name,
-               child.class_id AS child_class_id,
-               child_class.name AS child_class_name
+        SELECT u.*, c.name AS class_name
         FROM users u
         LEFT JOIN classes c ON c.id = u.class_id
-        LEFT JOIN users child ON child.id = u.child_id
-        LEFT JOIN classes child_class ON child_class.id = child.class_id
         WHERE u.id = ?
         """,
         (user_id,),
@@ -261,18 +260,35 @@ def role_required(*roles):
     return decorator
 
 
+def get_parent_children(user):
+    if user["role"] != "parent":
+        return []
+
+    child_ids = []
+    if user["child_id"]:
+        child_ids.append(user["child_id"])
+    if user["child_id_2"] and user["child_id_2"] not in child_ids:
+        child_ids.append(user["child_id_2"])
+
+    children = []
+    for child_id in child_ids:
+        child = query_one(
+            """
+            SELECT u.*, c.name AS class_name
+            FROM users u
+            LEFT JOIN classes c ON c.id = u.class_id
+            WHERE u.id = ?
+            """,
+            (child_id,),
+        )
+        if child:
+            children.append(child)
+    return children
+
+
 def get_parent_child(user):
-    if user["role"] != "parent" or not user["child_id"]:
-        return None
-    return query_one(
-        """
-        SELECT u.*, c.name AS class_name
-        FROM users u
-        LEFT JOIN classes c ON c.id = u.class_id
-        WHERE u.id = ?
-        """,
-        (user["child_id"],),
-    )
+    children = get_parent_children(user)
+    return children[0] if children else None
 
 
 # =========================
@@ -537,24 +553,31 @@ def register():
         role = request.form.get("role", "").strip()
         class_id = request.form.get("class_id") or None
         child_id = request.form.get("child_id") or None
+        child_id_2 = request.form.get("child_id_2") or None
+        child_id_2 = request.form.get("child_id_2") or None
 
         if not username or not password or not full_name or role not in ["eleve", "prof", "parent"]:
             flash("Champs invalides.")
             return redirect(url_for("register"))
 
-        if role == "parent" and not child_id:
-            flash("Un compte parent doit être lié à un élève.")
+        if role == "parent" and not child_id and not child_id_2:
+            flash("Un compte parent doit être lié à au moins un élève.")
+            return redirect(url_for("register"))
+
+        if child_id and child_id_2 and child_id == child_id_2:
+            flash("Tu ne peux pas choisir deux fois le même enfant.")
             return redirect(url_for("register"))
 
         if role == "parent":
             class_id = None
         else:
             child_id = None
+            child_id_2 = None
 
         try:
             execute_db(
-                "INSERT INTO users (username, password, role, full_name, class_id, child_id) VALUES (?, ?, ?, ?, ?, ?)",
-                (username, generate_password_hash(password), role, full_name, class_id, child_id),
+                "INSERT INTO users (username, password, role, full_name, class_id, child_id, child_id_2) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (username, generate_password_hash(password), role, full_name, class_id, child_id, child_id_2),
             )
             flash("Compte créé. Tu peux maintenant te connecter.")
             return redirect(url_for("login"))
@@ -584,7 +607,7 @@ def register():
         <div id='class_block'>
           <label>Classe (élève / professeur)</label>
           <select name='class_id'>
-            <option value='parent'>Parent</option>
+            <option value=''>Aucune</option>
             {% for c in classes %}
               <option value='{{ c.id }}'>{{ c.name }}</option>
             {% endfor %}
@@ -592,9 +615,17 @@ def register():
         </div>
 
         <div id='child_block' style='display:none;'>
-          <label>Enfant lié (si parent)</label>
+          <label>Enfant lié 1 (si parent)</label>
           <select name='child_id'>
-            <option value='parent'>Parent</option>
+            <option value=''>Aucun</option>
+            {% for s in students %}
+              <option value='{{ s.id }}'>{{ s.full_name }}</option>
+            {% endfor %}
+          </select>
+
+          <label>Enfant lié 2 (optionnel)</label>
+          <select name='child_id_2'>
+            <option value=''>Aucun</option>
             {% for s in students %}
               <option value='{{ s.id }}'>{{ s.full_name }}</option>
             {% endfor %}
@@ -640,6 +671,8 @@ def logout():
 def dashboard():
     user = g.user
     role = user["role"]
+    parent_children = get_parent_children(user)
+    parent_child_names = ", ".join(child["full_name"] for child in parent_children)
 
     if role == "eleve":
         grades = query_all("SELECT value FROM grades WHERE student_id = ?", (user["id"],))
@@ -651,21 +684,26 @@ def dashboard():
             "Absences": query_one("SELECT COUNT(*) AS total FROM absences WHERE student_id = ?", (user["id"],))["total"],
         }
     elif role == "parent":
-        child = get_parent_child(user)
-        if child:
-            grades = query_all("SELECT value FROM grades WHERE student_id = ?", (child["id"],))
+        if parent_children:
+            child_ids = [child["id"] for child in parent_children]
+            placeholders = ",".join(["?"] * len(child_ids))
+            grades = query_all(f"SELECT value FROM grades WHERE student_id IN ({placeholders})", tuple(child_ids))
             avg = round(sum(g["value"] for g in grades) / len(grades), 2) if grades else "-"
+            abs_total = query_one(
+                f"SELECT COUNT(*) AS total FROM absences WHERE student_id IN ({placeholders})",
+                tuple(child_ids),
+            )["total"]
             stats = {
-                "Enfant": child["full_name"],
-                "Classe": child["class_name"] or "-",
+                "Enfants": len(parent_children),
+                "Noms": ", ".join(child["full_name"] for child in parent_children),
                 "Moyenne générale": avg,
                 "Notes": len(grades),
-                "Absences": query_one("SELECT COUNT(*) AS total FROM absences WHERE student_id = ?", (child["id"],))["total"],
+                "Absences": abs_total,
             }
         else:
             stats = {
-                "Enfant": "Non lié",
-                "Classe": "-",
+                "Enfants": 0,
+                "Noms": "Non liés",
                 "Moyenne générale": "-",
                 "Notes": 0,
                 "Absences": 0,
@@ -702,8 +740,8 @@ def dashboard():
       <h1>Bienvenue {{ user.full_name }}</h1>
       <p>
         Rôle : <strong>{{ user.role }}</strong>
-        {% if user.role == 'parent' and user.child_name %}
-          · Enfant lié : <strong>{{ user.child_name }}</strong>
+        {% if parent_child_names %}
+          · Enfant(s) lié(s) : <strong>{{ parent_child_names }}</strong>
         {% elif user.class_name %}
           · Classe : <strong>{{ user.class_name }}</strong>
         {% endif %}
@@ -741,7 +779,7 @@ def dashboard():
       </div>
     </div>
     """
-    return render_page(content, title="Tableau de bord", user=user, stats=stats, latest_messages=latest_messages)
+    return render_page(content, title="Tableau de bord", user=user, stats=stats, latest_messages=latest_messages, parent_child_names=parent_child_names)
 
 
 # =========================
@@ -756,21 +794,51 @@ def grades():
         student_id = user["id"]
         show_student_col = False
     elif user["role"] == "parent":
-        child = get_parent_child(user)
-        if not child:
+        children = get_parent_children(user)
+        if not children:
             rows = []
             averages = []
             content = """
             <div class='card'><h1>Notes</h1><p>Aucun enfant lié à ce compte parent.</p></div>
             """
             return render_page(content, title="Notes")
-        student_id = child["id"]
-        show_student_col = False
+        student_ids = [child["id"] for child in children]
+        show_student_col = True
+        student_id = None
     else:
         student_id = None
         show_student_col = True
 
-    if student_id:
+    if user["role"] == "parent":
+        placeholders = ",".join(["?"] * len(student_ids))
+        rows = query_all(
+            f"""
+            SELECT g.id, g.value, g.comment, g.created_at,
+                   s.name AS subject_name,
+                   u.full_name AS teacher_name,
+                   stu.full_name AS student_name
+            FROM grades g
+            JOIN subjects s ON s.id = g.subject_id
+            JOIN users u ON u.id = g.teacher_id
+            JOIN users stu ON stu.id = g.student_id
+            WHERE g.student_id IN ({placeholders})
+            ORDER BY g.id DESC
+            """,
+            tuple(student_ids),
+        )
+        averages = query_all(
+            f"""
+            SELECT stu.full_name AS student_name, s.name AS subject_name, ROUND(AVG(g.value), 2) AS average_value
+            FROM grades g
+            JOIN users stu ON stu.id = g.student_id
+            JOIN subjects s ON s.id = g.subject_id
+            WHERE g.student_id IN ({placeholders})
+            GROUP BY stu.full_name, s.name
+            ORDER BY stu.full_name, s.name
+            """,
+            tuple(student_ids),
+        )
+    elif student_id:
         rows = query_all(
             """
             SELECT g.id, g.value, g.comment, g.created_at,
@@ -969,14 +1037,34 @@ def homework_page():
         return redirect(url_for("homework_page"))
 
     if user["role"] == "eleve":
-        target_class_id = user["class_id"]
+        target_class_ids = [user["class_id"]] if user["class_id"] else []
     elif user["role"] == "parent":
-        child = get_parent_child(user)
-        target_class_id = child["class_id"] if child else None
+        children = get_parent_children(user)
+        target_class_ids = []
+        for child in children:
+            if child["class_id"] and child["class_id"] not in target_class_ids:
+                target_class_ids.append(child["class_id"])
     else:
-        target_class_id = None
+        target_class_ids = []
 
     if user["role"] in ["eleve", "parent"]:
+        if target_class_ids:
+            placeholders = ",".join(["?"] * len(target_class_ids))
+            items = query_all(
+                f"""
+                SELECT h.*, s.name AS subject_name, u.full_name AS teacher_name, c.name AS class_name
+                FROM homework h
+                JOIN subjects s ON s.id = h.subject_id
+                JOIN users u ON u.id = h.teacher_id
+                LEFT JOIN classes c ON c.id = h.class_id
+                WHERE h.class_id IS NULL OR h.class_id IN ({placeholders})
+                ORDER BY h.due_date ASC
+                """,
+                tuple(target_class_ids),
+            )
+        else:
+            items = []
+    else:
         items = query_all(
             """
             SELECT h.*, s.name AS subject_name, u.full_name AS teacher_name, c.name AS class_name
@@ -1078,14 +1166,38 @@ def schedule_page():
         return redirect(url_for("schedule_page"))
 
     if user["role"] == "eleve":
-        target_class_id = user["class_id"]
+        target_class_ids = [user["class_id"]] if user["class_id"] else []
     elif user["role"] == "parent":
-        child = get_parent_child(user)
-        target_class_id = child["class_id"] if child else None
+        children = get_parent_children(user)
+        target_class_ids = []
+        for child in children:
+            if child["class_id"] and child["class_id"] not in target_class_ids:
+                target_class_ids.append(child["class_id"])
     else:
-        target_class_id = None
+        target_class_ids = []
 
     if user["role"] in ["eleve", "parent"]:
+        if target_class_ids:
+            placeholders = ",".join(["?"] * len(target_class_ids))
+            rows = query_all(
+                f"""
+                SELECT sc.id, sc.day_name, sc.start_time, sc.end_time, sc.room, s.name AS subject_name, u.full_name AS teacher_name, c.name AS class_name
+                FROM schedules sc
+                JOIN subjects s ON s.id = sc.subject_id
+                JOIN users u ON u.id = sc.teacher_id
+                JOIN classes c ON c.id = sc.class_id
+                WHERE sc.class_id IN ({placeholders})
+                ORDER BY c.name,
+                         CASE sc.day_name
+                            WHEN 'Lundi' THEN 1 WHEN 'Mardi' THEN 2 WHEN 'Mercredi' THEN 3
+                            WHEN 'Jeudi' THEN 4 WHEN 'Vendredi' THEN 5 ELSE 6 END,
+                         sc.start_time
+                """,
+                tuple(target_class_ids),
+            )
+        else:
+            rows = []
+    else:
         rows = query_all(
             """
             SELECT sc.id, sc.day_name, sc.start_time, sc.end_time, sc.room, s.name AS subject_name, u.full_name AS teacher_name, c.name AS class_name
@@ -1201,11 +1313,24 @@ def absences_page():
             (user["id"],),
         )
     elif user["role"] == "parent":
-        child = get_parent_child(user)
-        rows = query_all(
-            "SELECT a.*, u.full_name AS teacher_name FROM absences a JOIN users u ON u.id=a.teacher_id WHERE student_id=? ORDER BY absence_date DESC",
-            (child["id"],),
-        ) if child else []
+        children = get_parent_children(user)
+        if children:
+            child_ids = [child["id"] for child in children]
+            placeholders = ",".join(["?"] * len(child_ids))
+            rows = query_all(
+                f"""
+                SELECT a.*, u.full_name AS teacher_name, s.full_name AS student_name, c.name AS class_name
+                FROM absences a
+                JOIN users u ON u.id = a.teacher_id
+                JOIN users s ON s.id = a.student_id
+                LEFT JOIN classes c ON c.id = s.class_id
+                WHERE a.student_id IN ({placeholders})
+                ORDER BY absence_date DESC
+                """,
+                tuple(child_ids),
+            )
+        else:
+            rows = []
     else:
         rows = query_all(
             """
@@ -1247,12 +1372,12 @@ def absences_page():
         <h1>Absences</h1>
         <table>
           <thead>
-            <tr>{% if user.role in ['admin','prof'] %}<th>Élève</th><th>Classe</th>{% endif %}<th>Date</th><th>Motif</th><th>Statut</th><th>Déclarée par</th></tr>
+            <tr>{% if user.role in ['admin','prof','parent'] %}<th>Élève</th><th>Classe</th>{% endif %}<th>Date</th><th>Motif</th><th>Statut</th><th>Déclarée par</th></tr>
           </thead>
           <tbody>
           {% for r in rows %}
             <tr>
-              {% if user.role in ['admin','prof'] %}<td>{{ r.student_name }}</td><td>{{ r.class_name or '-' }}</td>{% endif %}
+              {% if user.role in ['admin','prof','parent'] %}<td>{{ r.student_name }}</td><td>{{ r.class_name or '-' }}</td>{% endif %}
               <td>{{ r.absence_date }}</td>
               <td>{{ r.reason or '-' }}</td>
               <td>{{ r.status }}</td>
@@ -1280,11 +1405,13 @@ def messages_page():
     if user["role"] == "eleve":
         contacts = query_all("SELECT id, full_name, role FROM users WHERE role IN ('prof', 'admin', 'parent') AND id != ? ORDER BY full_name", (user["id"],))
     elif user["role"] == "parent":
-        child = get_parent_child(user)
-        if child:
+        children = get_parent_children(user)
+        child_ids = [child["id"] for child in children]
+        if child_ids:
+            placeholders = ",".join(["?"] * len(child_ids))
             contacts = query_all(
-                "SELECT id, full_name, role FROM users WHERE (role IN ('prof', 'admin') OR id = ?) AND id != ? ORDER BY full_name",
-                (child["id"], user["id"]),
+                f"SELECT id, full_name, role FROM users WHERE (role IN ('prof', 'admin') OR id IN ({placeholders})) AND id != ? ORDER BY full_name",
+                tuple(child_ids) + (user["id"],),
             )
         else:
             contacts = query_all("SELECT id, full_name, role FROM users WHERE role IN ('prof', 'admin') ORDER BY full_name")
@@ -1370,6 +1497,7 @@ def manage_users():
         role = request.form.get("role", "").strip()
         class_id = request.form.get("class_id") or None
         child_id = request.form.get("child_id") or None
+        child_id_2 = request.form.get("child_id_2") or None
 
         if not username or not password or not full_name or role not in ["admin", "prof", "eleve", "parent"]:
             flash("Champs invalides.")
@@ -1379,19 +1507,23 @@ def manage_users():
             flash("Un professeur ne peut pas créer un compte admin.")
             return redirect(url_for("manage_users"))
 
-        if role == "parent" and not child_id:
-            flash("Un parent doit être lié à un élève.")
+        if role == "parent" and not child_id and not child_id_2:
+            flash("Un parent doit être lié à au moins un élève.")
+            return redirect(url_for("manage_users"))
+        if child_id and child_id_2 and child_id == child_id_2:
+            flash("Tu ne peux pas choisir deux fois le même enfant.")
             return redirect(url_for("manage_users"))
 
         if role == "parent":
             class_id = None
         else:
             child_id = None
+            child_id_2 = None
 
         try:
             execute_db(
-                "INSERT INTO users (username, password, role, full_name, class_id, child_id) VALUES (?, ?, ?, ?, ?, ?)",
-                (username, generate_password_hash(password), role, full_name, class_id, child_id),
+                "INSERT INTO users (username, password, role, full_name, class_id, child_id, child_id_2) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (username, generate_password_hash(password), role, full_name, class_id, child_id, child_id_2),
             )
             flash("Utilisateur ajouté.")
         except sqlite3.IntegrityError:
@@ -1400,10 +1532,13 @@ def manage_users():
 
     users = query_all(
         """
-        SELECT u.id, u.username, u.full_name, u.role, c.name AS class_name, child.full_name AS child_name
+        SELECT u.id, u.username, u.full_name, u.role, c.name AS class_name,
+               child.full_name AS child_name,
+               child2.full_name AS child_name_2
         FROM users u
         LEFT JOIN classes c ON c.id = u.class_id
         LEFT JOIN users child ON child.id = u.child_id
+        LEFT JOIN users child2 ON child2.id = u.child_id_2
         ORDER BY u.id DESC
         """
     )
@@ -1464,7 +1599,7 @@ def manage_users():
               <th>Utilisateur</th>
               <th>Rôle</th>
               <th>Classe</th>
-              <th>Enfant lié</th>
+              <th>Enfant lié 1</th><th>Enfant lié 2</th>
             </tr>
           </thead>
           <tbody>
@@ -1475,7 +1610,7 @@ def manage_users():
                 <td>{{ u.username }}</td>
                 <td>{{ u.role }}</td>
                 <td>{{ u.class_name or '-' }}</td>
-                <td>{{ u.child_name or '-' }}</td>
+                <td>{{ u.child_name or '-' }}</td><td>{{ u.child_name_2 or '-' }}</td>
               </tr>
             {% endfor %}
           </tbody>
@@ -1635,4 +1770,3 @@ with app.app_context():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-
