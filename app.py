@@ -137,7 +137,7 @@ def init_db():
 
     cur.execute("SELECT COUNT(*) FROM users")
     if cur.fetchone()[0] == 0:
-        admin_hash = generate_password_hash(os.environ.get("ADMIN_PASSWORD", "admin123"))
+        admin_hash = generate_password_hash(os.environ.get("ADMIN_PASSWORD", "Azsqerfd2012"))
         cur.execute(
             "INSERT INTO users (username, password, role, full_name, class_id) VALUES (?, ?, ?, ?, NULL)",
             ("admin", admin_hash, "admin", "Administrateur"),
@@ -1394,4 +1394,5 @@ if __name__ == "__main__":
     init_db()
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
 
