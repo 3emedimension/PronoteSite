@@ -6,13 +6,22 @@ from functools import wraps
 from flask import Flask, flash, redirect, render_template_string, request, session, url_for, g
 from werkzeug.security import check_password_hash, generate_password_hash
 
+try:
+    import psycopg2
+    import psycopg2.extras
+except Exception:
+    psycopg2 = None
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-moi-en-secret-tres-long")
 app.config["SESSION_PERMANENT"] = False
 app.config["TEMPLATES_AUTO_RELOAD"] = False
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
-DB_NAME = "mini_pronote_v5.db"
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+USE_POSTGRES = bool(DATABASE_URL and psycopg2)
+DB_NAME = "mini_pronote_v6.db"
 ADMIN_DEFAULT_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Azsqerfd2012")
 
 
@@ -20,9 +29,17 @@ ADMIN_DEFAULT_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Azsqerfd2012")
 # Base de données
 # =========================
 def get_conn():
+    if USE_POSTGRES:
+        return psycopg2.connect(DATABASE_URL)
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def adapt_sql(sql: str) -> str:
+    if USE_POSTGRES:
+        return sql.replace("?", "%s")
+    return sql
 
 
 # =========================
@@ -30,171 +47,299 @@ def get_conn():
 # =========================
 def query_all(sql, params=()):
     conn = get_conn()
-    rows = conn.execute(sql, params).fetchall()
-    conn.close()
-    return rows
+    try:
+        if USE_POSTGRES:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(adapt_sql(sql), params)
+                return cur.fetchall()
+        rows = conn.execute(adapt_sql(sql), params).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
 
 
 def query_one(sql, params=()):
     conn = get_conn()
-    row = conn.execute(sql, params).fetchone()
-    conn.close()
-    return row
+    try:
+        if USE_POSTGRES:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(adapt_sql(sql), params)
+                return cur.fetchone()
+        row = conn.execute(adapt_sql(sql), params).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
 
 
 def execute_db(sql, params=()):
     conn = get_conn()
-    conn.execute(sql, params)
-    conn.commit()
-    conn.close()
+    try:
+        if USE_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(adapt_sql(sql), params)
+            conn.commit()
+        else:
+            conn.execute(adapt_sql(sql), params)
+            conn.commit()
+    finally:
+        conn.close()
+
+
+def executemany_db(sql, params_list):
+    conn = get_conn()
+    try:
+        if USE_POSTGRES:
+            with conn.cursor() as cur:
+                cur.executemany(adapt_sql(sql), params_list)
+            conn.commit()
+        else:
+            conn.executemany(adapt_sql(sql), params_list)
+            conn.commit()
+    finally:
+        conn.close()
 
 
 def table_has_column(table_name, column_name):
+    if USE_POSTGRES:
+        row = query_one(
+            """
+            SELECT 1 AS ok
+            FROM information_schema.columns
+            WHERE table_name = ? AND column_name = ?
+            LIMIT 1
+            """,
+            (table_name, column_name),
+        )
+        return bool(row)
+
     conn = get_conn()
-    columns = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
-    conn.close()
-    return any(col[1] == column_name for col in columns)
+    try:
+        columns = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        return any(col[1] == column_name for col in columns)
+    finally:
+        conn.close()
 
 
 def init_db():
     conn = get_conn()
-    cur = conn.cursor()
+    try:
+        cur = conn.cursor()
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS classes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL
-        )
-    """)
+        if USE_POSTGRES:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS classes (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT UNIQUE NOT NULL
+                )
+            """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
-            role TEXT NOT NULL CHECK(role IN ('admin', 'prof', 'eleve', 'parent')),
-            full_name TEXT NOT NULL,
-            class_id INTEGER,
-            child_id INTEGER,
-            child_id_2 INTEGER,
-            FOREIGN KEY(class_id) REFERENCES classes(id),
-            FOREIGN KEY(child_id) REFERENCES users(id),
-            FOREIGN KEY(child_id_2) REFERENCES users(id)
-        )
-    """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    username TEXT UNIQUE NOT NULL,
+                    password TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK(role IN ('admin', 'prof', 'eleve', 'parent')),
+                    full_name TEXT NOT NULL,
+                    class_id INTEGER REFERENCES classes(id),
+                    child_id INTEGER REFERENCES users(id),
+                    child_id_2 INTEGER REFERENCES users(id)
+                )
+            """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS subjects (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE NOT NULL
-        )
-    """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS subjects (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT UNIQUE NOT NULL
+                )
+            """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS grades (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_id INTEGER NOT NULL,
-            subject_id INTEGER NOT NULL,
-            teacher_id INTEGER NOT NULL,
-            value REAL NOT NULL,
-            comment TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(student_id) REFERENCES users(id),
-            FOREIGN KEY(subject_id) REFERENCES subjects(id),
-            FOREIGN KEY(teacher_id) REFERENCES users(id)
-        )
-    """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS grades (
+                    id SERIAL PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES users(id),
+                    subject_id INTEGER NOT NULL REFERENCES subjects(id),
+                    teacher_id INTEGER NOT NULL REFERENCES users(id),
+                    value REAL NOT NULL,
+                    comment TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS homework (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            class_id INTEGER,
-            subject_id INTEGER NOT NULL,
-            teacher_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            description TEXT NOT NULL,
-            due_date TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(class_id) REFERENCES classes(id),
-            FOREIGN KEY(subject_id) REFERENCES subjects(id),
-            FOREIGN KEY(teacher_id) REFERENCES users(id)
-        )
-    """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS homework (
+                    id SERIAL PRIMARY KEY,
+                    class_id INTEGER REFERENCES classes(id),
+                    subject_id INTEGER NOT NULL REFERENCES subjects(id),
+                    teacher_id INTEGER NOT NULL REFERENCES users(id),
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    due_date TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS schedules (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            class_id INTEGER NOT NULL,
-            subject_id INTEGER NOT NULL,
-            teacher_id INTEGER NOT NULL,
-            day_name TEXT NOT NULL,
-            start_time TEXT NOT NULL,
-            end_time TEXT NOT NULL,
-            room TEXT,
-            FOREIGN KEY(class_id) REFERENCES classes(id),
-            FOREIGN KEY(subject_id) REFERENCES subjects(id),
-            FOREIGN KEY(teacher_id) REFERENCES users(id)
-        )
-    """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS schedules (
+                    id SERIAL PRIMARY KEY,
+                    class_id INTEGER NOT NULL REFERENCES classes(id),
+                    subject_id INTEGER NOT NULL REFERENCES subjects(id),
+                    teacher_id INTEGER NOT NULL REFERENCES users(id),
+                    day_name TEXT NOT NULL,
+                    start_time TEXT NOT NULL,
+                    end_time TEXT NOT NULL,
+                    room TEXT
+                )
+            """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS absences (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            student_id INTEGER NOT NULL,
-            teacher_id INTEGER NOT NULL,
-            absence_date TEXT NOT NULL,
-            reason TEXT,
-            status TEXT NOT NULL DEFAULT 'Non justifiée',
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(student_id) REFERENCES users(id),
-            FOREIGN KEY(teacher_id) REFERENCES users(id)
-        )
-    """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS absences (
+                    id SERIAL PRIMARY KEY,
+                    student_id INTEGER NOT NULL REFERENCES users(id),
+                    teacher_id INTEGER NOT NULL REFERENCES users(id),
+                    absence_date TEXT NOT NULL,
+                    reason TEXT,
+                    status TEXT NOT NULL DEFAULT 'Non justifiée',
+                    created_at TEXT NOT NULL
+                )
+            """)
 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sender_id INTEGER NOT NULL,
-            receiver_id INTEGER NOT NULL,
-            subject TEXT NOT NULL,
-            body TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(sender_id) REFERENCES users(id),
-            FOREIGN KEY(receiver_id) REFERENCES users(id)
-        )
-    """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id SERIAL PRIMARY KEY,
+                    sender_id INTEGER NOT NULL REFERENCES users(id),
+                    receiver_id INTEGER NOT NULL REFERENCES users(id),
+                    subject TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+        else:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS classes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL
+                )
+            """)
 
-    conn.commit()
-    conn.close()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT UNIQUE NOT NULL,
+                    password TEXT NOT NULL,
+                    role TEXT NOT NULL CHECK(role IN ('admin', 'prof', 'eleve', 'parent')),
+                    full_name TEXT NOT NULL,
+                    class_id INTEGER,
+                    child_id INTEGER,
+                    child_id_2 INTEGER,
+                    FOREIGN KEY(class_id) REFERENCES classes(id),
+                    FOREIGN KEY(child_id) REFERENCES users(id),
+                    FOREIGN KEY(child_id_2) REFERENCES users(id)
+                )
+            """)
 
-    # Migration légère si une ancienne base existe déjà
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS subjects (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL
+                )
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS grades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    student_id INTEGER NOT NULL,
+                    subject_id INTEGER NOT NULL,
+                    teacher_id INTEGER NOT NULL,
+                    value REAL NOT NULL,
+                    comment TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(student_id) REFERENCES users(id),
+                    FOREIGN KEY(subject_id) REFERENCES subjects(id),
+                    FOREIGN KEY(teacher_id) REFERENCES users(id)
+                )
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS homework (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    class_id INTEGER,
+                    subject_id INTEGER NOT NULL,
+                    teacher_id INTEGER NOT NULL,
+                    title TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    due_date TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(class_id) REFERENCES classes(id),
+                    FOREIGN KEY(subject_id) REFERENCES subjects(id),
+                    FOREIGN KEY(teacher_id) REFERENCES users(id)
+                )
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS schedules (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    class_id INTEGER NOT NULL,
+                    subject_id INTEGER NOT NULL,
+                    teacher_id INTEGER NOT NULL,
+                    day_name TEXT NOT NULL,
+                    start_time TEXT NOT NULL,
+                    end_time TEXT NOT NULL,
+                    room TEXT,
+                    FOREIGN KEY(class_id) REFERENCES classes(id),
+                    FOREIGN KEY(subject_id) REFERENCES subjects(id),
+                    FOREIGN KEY(teacher_id) REFERENCES users(id)
+                )
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS absences (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    student_id INTEGER NOT NULL,
+                    teacher_id INTEGER NOT NULL,
+                    absence_date TEXT NOT NULL,
+                    reason TEXT,
+                    status TEXT NOT NULL DEFAULT 'Non justifiée',
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(student_id) REFERENCES users(id),
+                    FOREIGN KEY(teacher_id) REFERENCES users(id)
+                )
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sender_id INTEGER NOT NULL,
+                    receiver_id INTEGER NOT NULL,
+                    subject TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(sender_id) REFERENCES users(id),
+                    FOREIGN KEY(receiver_id) REFERENCES users(id)
+                )
+            """)
+
+        conn.commit()
+    finally:
+        conn.close()
+
     if not table_has_column("users", "child_id"):
         execute_db("ALTER TABLE users ADD COLUMN child_id INTEGER")
     if not table_has_column("users", "child_id_2"):
         execute_db("ALTER TABLE users ADD COLUMN child_id_2 INTEGER")
 
-    cur_classes = query_one("SELECT COUNT(*) AS total FROM classes")
-    if cur_classes["total"] == 0:
-        conn = get_conn()
-        conn.executemany(
+    if query_one("SELECT COUNT(*) AS total FROM classes")["total"] == 0:
+        executemany_db(
             "INSERT INTO classes (name) VALUES (?)",
             [("6A",), ("6B",), ("5A",), ("5B",), ("4A",), ("4B",), ("3A",), ("3B",)],
         )
-        conn.commit()
-        conn.close()
 
-    cur_subjects = query_one("SELECT COUNT(*) AS total FROM subjects")
-    if cur_subjects["total"] == 0:
-        conn = get_conn()
-        conn.executemany(
+    if query_one("SELECT COUNT(*) AS total FROM subjects")["total"] == 0:
+        executemany_db(
             "INSERT INTO subjects (name) VALUES (?)",
             [("Mathématiques",), ("Français",), ("Histoire",), ("Anglais",), ("SVT",), ("Physique",)],
         )
-        conn.commit()
-        conn.close()
 
-    # Admin : on le crée si absent, sinon on remet son mot de passe demandé
-    admin_user = query_one("SELECT id FROM users WHERE username = 'admin'")
+    admin_user = query_one("SELECT id FROM users WHERE username = ?", ("admin",))
     admin_hash = generate_password_hash(ADMIN_DEFAULT_PASSWORD)
     if not admin_user:
         execute_db(
@@ -203,8 +348,8 @@ def init_db():
         )
     else:
         execute_db(
-            "UPDATE users SET password = ?, role = 'admin', full_name = 'Administrateur', child_id = NULL, child_id_2 = NULL WHERE username = 'admin'",
-            (admin_hash,),
+            "UPDATE users SET password = ?, role = 'admin', full_name = 'Administrateur', child_id = NULL, child_id_2 = NULL WHERE username = ?",
+            (admin_hash, "admin"),
         )
 
 
@@ -265,9 +410,9 @@ def get_parent_children(user):
         return []
 
     child_ids = []
-    if user["child_id"]:
+    if user.get("child_id"):
         child_ids.append(user["child_id"])
-    if user["child_id_2"] and user["child_id_2"] not in child_ids:
+    if user.get("child_id_2") and user["child_id_2"] not in child_ids:
         child_ids.append(user["child_id_2"])
 
     children = []
@@ -284,11 +429,6 @@ def get_parent_children(user):
         if child:
             children.append(child)
     return children
-
-
-def get_parent_child(user):
-    children = get_parent_children(user)
-    return children[0] if children else None
 
 
 # =========================
@@ -340,11 +480,7 @@ BASE_TOP = """
       margin: 28px auto;
       padding: 0 18px;
     }
-    .grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-      gap: 18px;
-    }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
     .card {
       background: rgba(255,255,255,0.93);
       backdrop-filter: blur(10px);
@@ -364,64 +500,24 @@ BASE_TOP = """
     .hero p { opacity: 0.96; }
     h1, h2, h3 { margin-top: 0; }
     input, select, textarea {
-      width: 100%;
-      padding: 12px 13px;
-      border: 1px solid #d5e0f3;
-      border-radius: 13px;
-      margin-top: 6px;
-      margin-bottom: 14px;
-      font-size: 15px;
-      background: #fff;
-      outline: none;
+      width: 100%; padding: 12px 13px; border: 1px solid #d5e0f3; border-radius: 13px;
+      margin-top: 6px; margin-bottom: 14px; font-size: 15px; background: #fff; outline: none;
     }
-    input:focus, select:focus, textarea:focus {
-      border-color: #60a5fa;
-      box-shadow: 0 0 0 4px rgba(96,165,250,0.16);
-    }
+    input:focus, select:focus, textarea:focus { border-color: #60a5fa; box-shadow: 0 0 0 4px rgba(96,165,250,0.16); }
     textarea { min-height: 110px; resize: vertical; }
     button {
-      background: linear-gradient(90deg, #1d4ed8, #2563eb);
-      color: white;
-      border: none;
-      padding: 11px 16px;
-      border-radius: 12px;
-      font-weight: 700;
-      cursor: pointer;
+      background: linear-gradient(90deg, #1d4ed8, #2563eb); color: white; border: none;
+      padding: 11px 16px; border-radius: 12px; font-weight: 700; cursor: pointer;
       box-shadow: 0 10px 20px rgba(37,99,235,0.18);
     }
     button:hover { transform: translateY(-1px); }
     .danger { background: linear-gradient(90deg, #c0392b, #e74c3c); }
     .muted { color: #5f6b7a; }
-    .flash {
-      background: #fff9db;
-      border: 1px solid #f2dd7d;
-      padding: 11px 13px;
-      border-radius: 12px;
-      margin-bottom: 16px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      overflow: hidden;
-      border-radius: 16px;
-      background: white;
-    }
-    th, td {
-      padding: 12px 10px;
-      border-bottom: 1px solid #ebf0f8;
-      text-align: left;
-      vertical-align: top;
-    }
+    .flash { background: #fff9db; border: 1px solid #f2dd7d; padding: 11px 13px; border-radius: 12px; margin-bottom: 16px; }
+    table { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 16px; background: white; }
+    th, td { padding: 12px 10px; border-bottom: 1px solid #ebf0f8; text-align: left; vertical-align: top; }
     th { background: #edf4ff; }
-    .badge {
-      display: inline-block;
-      padding: 6px 10px;
-      border-radius: 999px;
-      background: #e7efff;
-      color: #1d4ed8;
-      font-weight: 700;
-      font-size: 13px;
-    }
+    .badge { display: inline-block; padding: 6px 10px; border-radius: 999px; background: #e7efff; color: #1d4ed8; font-weight: 700; font-size: 13px; }
     .small { font-size: 13px; }
     .metric { font-size: 34px; font-weight: 800; margin: 0; }
     .two-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
@@ -487,9 +583,7 @@ def render_page(content, **context):
 # =========================
 @app.route("/")
 def index():
-    if session.get("user_id"):
-        return redirect(url_for("dashboard"))
-    return redirect(url_for("login"))
+    return redirect(url_for("dashboard")) if session.get("user_id") else redirect(url_for("login"))
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -554,16 +648,13 @@ def register():
         class_id = request.form.get("class_id") or None
         child_id = request.form.get("child_id") or None
         child_id_2 = request.form.get("child_id_2") or None
-        child_id_2 = request.form.get("child_id_2") or None
 
         if not username or not password or not full_name or role not in ["eleve", "prof", "parent"]:
             flash("Champs invalides.")
             return redirect(url_for("register"))
-
         if role == "parent" and not child_id and not child_id_2:
             flash("Un compte parent doit être lié à au moins un élève.")
             return redirect(url_for("register"))
-
         if child_id and child_id_2 and child_id == child_id_2:
             flash("Tu ne peux pas choisir deux fois le même enfant.")
             return redirect(url_for("register"))
@@ -581,7 +672,7 @@ def register():
             )
             flash("Compte créé. Tu peux maintenant te connecter.")
             return redirect(url_for("login"))
-        except sqlite3.IntegrityError:
+        except Exception:
             flash("Nom d'utilisateur déjà utilisé.")
 
     content = """
@@ -590,65 +681,43 @@ def register():
       <form method='post' autocomplete='off'>
         <label>Nom complet</label>
         <input name='full_name' required>
-
         <label>Nom d'utilisateur</label>
         <input name='username' required>
-
         <label>Mot de passe</label>
         <input type='password' name='password' required>
-
         <label>Type de compte</label>
         <select name='role' id='role_select' required onchange='toggleRegisterFields()'>
           <option value='eleve'>Élève</option>
           <option value='prof'>Professeur</option>
           <option value='parent'>Parent</option>
         </select>
-
         <div id='class_block'>
           <label>Classe (élève / professeur)</label>
           <select name='class_id'>
             <option value=''>Aucune</option>
-            {% for c in classes %}
-              <option value='{{ c.id }}'>{{ c.name }}</option>
-            {% endfor %}
+            {% for c in classes %}<option value='{{ c.id }}'>{{ c.name }}</option>{% endfor %}
           </select>
         </div>
-
         <div id='child_block' style='display:none;'>
-          <label>Enfant lié 1 (si parent)</label>
+          <label>Enfant lié 1</label>
           <select name='child_id'>
             <option value=''>Aucun</option>
-            {% for s in students %}
-              <option value='{{ s.id }}'>{{ s.full_name }}</option>
-            {% endfor %}
+            {% for s in students %}<option value='{{ s.id }}'>{{ s.full_name }}</option>{% endfor %}
           </select>
-
-          <label>Enfant lié 2 (optionnel)</label>
+          <label>Enfant lié 2</label>
           <select name='child_id_2'>
             <option value=''>Aucun</option>
-            {% for s in students %}
-              <option value='{{ s.id }}'>{{ s.full_name }}</option>
-            {% endfor %}
+            {% for s in students %}<option value='{{ s.id }}'>{{ s.full_name }}</option>{% endfor %}
           </select>
         </div>
-
         <button type='submit'>Créer le compte</button>
       </form>
     </div>
-
     <script>
       function toggleRegisterFields() {
         const role = document.getElementById('role_select').value;
-        const classBlock = document.getElementById('class_block');
-        const childBlock = document.getElementById('child_block');
-
-        if (role === 'parent') {
-          classBlock.style.display = 'none';
-          childBlock.style.display = 'block';
-        } else {
-          classBlock.style.display = 'block';
-          childBlock.style.display = 'none';
-        }
+        document.getElementById('class_block').style.display = role === 'parent' ? 'none' : 'block';
+        document.getElementById('child_block').style.display = role === 'parent' ? 'block' : 'none';
       }
       toggleRegisterFields();
     </script>
@@ -670,67 +739,55 @@ def logout():
 @login_required
 def dashboard():
     user = g.user
-    role = user["role"]
     parent_children = get_parent_children(user)
     parent_child_names = ", ".join(child["full_name"] for child in parent_children)
 
-    if role == "eleve":
-        grades = query_all("SELECT value FROM grades WHERE student_id = ?", (user["id"],))
-        avg = round(sum(g["value"] for g in grades) / len(grades), 2) if grades else "-"
+    if user["role"] == "eleve":
+        grades_list = query_all("SELECT value FROM grades WHERE student_id = ?", (user["id"],))
+        avg = round(sum(g["value"] for g in grades_list) / len(grades_list), 2) if grades_list else "-"
         stats = {
             "Moyenne générale": avg,
-            "Notes": len(grades),
+            "Notes": len(grades_list),
             "Devoirs": query_one("SELECT COUNT(*) AS total FROM homework WHERE class_id IS NULL OR class_id = ?", (user["class_id"],))["total"],
             "Absences": query_one("SELECT COUNT(*) AS total FROM absences WHERE student_id = ?", (user["id"],))["total"],
         }
-    elif role == "parent":
+    elif user["role"] == "parent":
         if parent_children:
             child_ids = [child["id"] for child in parent_children]
             placeholders = ",".join(["?"] * len(child_ids))
-            grades = query_all(f"SELECT value FROM grades WHERE student_id IN ({placeholders})", tuple(child_ids))
-            avg = round(sum(g["value"] for g in grades) / len(grades), 2) if grades else "-"
-            abs_total = query_one(
-                f"SELECT COUNT(*) AS total FROM absences WHERE student_id IN ({placeholders})",
-                tuple(child_ids),
-            )["total"]
+            grades_list = query_all(f"SELECT value FROM grades WHERE student_id IN ({placeholders})", tuple(child_ids))
+            avg = round(sum(g["value"] for g in grades_list) / len(grades_list), 2) if grades_list else "-"
+            abs_total = query_one(f"SELECT COUNT(*) AS total FROM absences WHERE student_id IN ({placeholders})", tuple(child_ids))["total"]
             stats = {
                 "Enfants": len(parent_children),
-                "Noms": ", ".join(child["full_name"] for child in parent_children),
+                "Noms": parent_child_names,
                 "Moyenne générale": avg,
-                "Notes": len(grades),
+                "Notes": len(grades_list),
                 "Absences": abs_total,
             }
         else:
-            stats = {
-                "Enfants": 0,
-                "Noms": "Non liés",
-                "Moyenne générale": "-",
-                "Notes": 0,
-                "Absences": 0,
-            }
-    elif role == "prof":
+            stats = {"Enfants": 0, "Noms": "Non liés", "Moyenne générale": "-", "Notes": 0, "Absences": 0}
+    elif user["role"] == "prof":
         stats = {
             "Notes saisies": query_one("SELECT COUNT(*) AS total FROM grades WHERE teacher_id = ?", (user["id"],))["total"],
             "Devoirs publiés": query_one("SELECT COUNT(*) AS total FROM homework WHERE teacher_id = ?", (user["id"],))["total"],
             "Messages reçus": query_one("SELECT COUNT(*) AS total FROM messages WHERE receiver_id = ?", (user["id"],))["total"],
-            "Élèves": query_one("SELECT COUNT(*) AS total FROM users WHERE role='eleve'", ())['total'],
+            "Élèves": query_one("SELECT COUNT(*) AS total FROM users WHERE role='eleve'")["total"],
         }
     else:
         stats = {
-            "Utilisateurs": query_one("SELECT COUNT(*) AS total FROM users", ())['total'],
-            "Classes": query_one("SELECT COUNT(*) AS total FROM classes", ())['total'],
-            "Notes": query_one("SELECT COUNT(*) AS total FROM grades", ())['total'],
-            "Messages": query_one("SELECT COUNT(*) AS total FROM messages", ())['total'],
+            "Utilisateurs": query_one("SELECT COUNT(*) AS total FROM users")["total"],
+            "Classes": query_one("SELECT COUNT(*) AS total FROM classes")["total"],
+            "Notes": query_one("SELECT COUNT(*) AS total FROM grades")["total"],
+            "Messages": query_one("SELECT COUNT(*) AS total FROM messages")["total"],
         }
 
     latest_messages = query_all(
         """
         SELECT m.subject, m.created_at, u.full_name AS sender_name
-        FROM messages m
-        JOIN users u ON u.id = m.sender_id
+        FROM messages m JOIN users u ON u.id = m.sender_id
         WHERE m.receiver_id = ?
-        ORDER BY m.id DESC
-        LIMIT 5
+        ORDER BY m.id DESC LIMIT 5
         """,
         (user["id"],),
     )
@@ -740,23 +797,13 @@ def dashboard():
       <h1>Bienvenue {{ user.full_name }}</h1>
       <p>
         Rôle : <strong>{{ user.role }}</strong>
-        {% if parent_child_names %}
-          · Enfant(s) lié(s) : <strong>{{ parent_child_names }}</strong>
-        {% elif user.class_name %}
-          · Classe : <strong>{{ user.class_name }}</strong>
-        {% endif %}
+        {% if parent_child_names %} · Enfant(s) lié(s) : <strong>{{ parent_child_names }}</strong>
+        {% elif user.class_name %} · Classe : <strong>{{ user.class_name }}</strong>{% endif %}
       </p>
     </div>
-
     <div class='grid'>
-      {% for key, value in stats.items() %}
-        <div class='card'>
-          <h3>{{ key }}</h3>
-          <p class='metric'>{{ value }}</p>
-        </div>
-      {% endfor %}
+      {% for key, value in stats.items() %}<div class='card'><h3>{{ key }}</h3><p class='metric'>{{ value }}</p></div>{% endfor %}
     </div>
-
     <div class='grid' style='margin-top:18px;'>
       <div class='card'>
         <h2>Accès rapide</h2>
@@ -769,13 +816,8 @@ def dashboard():
       <div class='card'>
         <h2>Derniers messages</h2>
         {% for m in latest_messages %}
-          <div style='padding:10px 0; border-bottom:1px solid #eef3fb;'>
-            <strong>{{ m.subject }}</strong><br>
-            <span class='small muted'>De {{ m.sender_name }} · {{ m.created_at }}</span>
-          </div>
-        {% else %}
-          <p class='muted'>Aucun message reçu.</p>
-        {% endfor %}
+          <div style='padding:10px 0; border-bottom:1px solid #eef3fb;'><strong>{{ m.subject }}</strong><br><span class='small muted'>De {{ m.sender_name }} · {{ m.created_at }}</span></div>
+        {% else %}<p class='muted'>Aucun message reçu.</p>{% endfor %}
       </div>
     </div>
     """
@@ -791,85 +833,56 @@ def grades():
     user = g.user
 
     if user["role"] == "eleve":
-        student_id = user["id"]
+        rows = query_all(
+            """
+            SELECT g.id, g.value, g.comment, g.created_at, s.name AS subject_name, u.full_name AS teacher_name
+            FROM grades g JOIN subjects s ON s.id = g.subject_id JOIN users u ON u.id = g.teacher_id
+            WHERE g.student_id = ? ORDER BY g.id DESC
+            """,
+            (user["id"],),
+        )
+        averages = query_all(
+            """
+            SELECT s.name AS subject_name, ROUND(AVG(g.value), 2) AS average_value
+            FROM grades g JOIN subjects s ON s.id = g.subject_id
+            WHERE g.student_id = ? GROUP BY s.name ORDER BY s.name
+            """,
+            (user["id"],),
+        )
         show_student_col = False
     elif user["role"] == "parent":
         children = get_parent_children(user)
         if not children:
-            rows = []
-            averages = []
-            content = """
-            <div class='card'><h1>Notes</h1><p>Aucun enfant lié à ce compte parent.</p></div>
-            """
-            return render_page(content, title="Notes")
+            return render_page("<div class='card'><h1>Notes</h1><p>Aucun enfant lié à ce compte parent.</p></div>", title="Notes")
         student_ids = [child["id"] for child in children]
-        show_student_col = True
-        student_id = None
-    else:
-        student_id = None
-        show_student_col = True
-
-    if user["role"] == "parent":
         placeholders = ",".join(["?"] * len(student_ids))
         rows = query_all(
             f"""
-            SELECT g.id, g.value, g.comment, g.created_at,
-                   s.name AS subject_name,
-                   u.full_name AS teacher_name,
-                   stu.full_name AS student_name
+            SELECT g.id, g.value, g.comment, g.created_at, s.name AS subject_name,
+                   u.full_name AS teacher_name, stu.full_name AS student_name
             FROM grades g
             JOIN subjects s ON s.id = g.subject_id
             JOIN users u ON u.id = g.teacher_id
             JOIN users stu ON stu.id = g.student_id
-            WHERE g.student_id IN ({placeholders})
-            ORDER BY g.id DESC
+            WHERE g.student_id IN ({placeholders}) ORDER BY g.id DESC
             """,
             tuple(student_ids),
         )
         averages = query_all(
             f"""
             SELECT stu.full_name AS student_name, s.name AS subject_name, ROUND(AVG(g.value), 2) AS average_value
-            FROM grades g
-            JOIN users stu ON stu.id = g.student_id
-            JOIN subjects s ON s.id = g.subject_id
+            FROM grades g JOIN users stu ON stu.id = g.student_id JOIN subjects s ON s.id = g.subject_id
             WHERE g.student_id IN ({placeholders})
-            GROUP BY stu.full_name, s.name
-            ORDER BY stu.full_name, s.name
+            GROUP BY stu.full_name, s.name ORDER BY stu.full_name, s.name
             """,
             tuple(student_ids),
         )
-    elif student_id:
-        rows = query_all(
-            """
-            SELECT g.id, g.value, g.comment, g.created_at,
-                   s.name AS subject_name,
-                   u.full_name AS teacher_name
-            FROM grades g
-            JOIN subjects s ON s.id = g.subject_id
-            JOIN users u ON u.id = g.teacher_id
-            WHERE g.student_id = ?
-            ORDER BY g.id DESC
-            """,
-            (student_id,),
-        )
-        averages = query_all(
-            """
-            SELECT s.name AS subject_name, ROUND(AVG(g.value), 2) AS average_value
-            FROM grades g
-            JOIN subjects s ON s.id = g.subject_id
-            WHERE g.student_id = ?
-            GROUP BY s.name
-            ORDER BY s.name
-            """,
-            (student_id,),
-        )
+        show_student_col = True
     else:
         rows = query_all(
             """
-            SELECT g.id, g.value, g.comment, g.created_at,
-                   s.name AS subject_name,
-                   stu.full_name AS student_name,
-                   tea.full_name AS teacher_name
+            SELECT g.id, g.value, g.comment, g.created_at, s.name AS subject_name,
+                   stu.full_name AS student_name, tea.full_name AS teacher_name
             FROM grades g
             JOIN subjects s ON s.id = g.subject_id
             JOIN users stu ON stu.id = g.student_id
@@ -880,65 +893,36 @@ def grades():
         averages = query_all(
             """
             SELECT stu.full_name AS student_name, s.name AS subject_name, ROUND(AVG(g.value), 2) AS average_value
-            FROM grades g
-            JOIN users stu ON stu.id = g.student_id
-            JOIN subjects s ON s.id = g.subject_id
-            GROUP BY stu.full_name, s.name
-            ORDER BY stu.full_name, s.name
+            FROM grades g JOIN users stu ON stu.id = g.student_id JOIN subjects s ON s.id = g.subject_id
+            GROUP BY stu.full_name, s.name ORDER BY stu.full_name, s.name
             """
         )
+        show_student_col = True
 
     content = """
     <div class='two-cols'>
       <div class='card'>
         <h1>Notes</h1>
         <table>
-          <thead>
-            <tr>
-              {% if show_student_col %}<th>Élève</th>{% endif %}
-              <th>Matière</th>
-              <th>Note</th>
-              <th>Professeur</th>
-              <th>Commentaire</th>
-              <th>Date</th>
-            </tr>
-          </thead>
+          <thead><tr>{% if show_student_col %}<th>Élève</th>{% endif %}<th>Matière</th><th>Note</th><th>Professeur</th><th>Commentaire</th><th>Date</th></tr></thead>
           <tbody>
             {% for row in rows %}
-            <tr>
-              {% if show_student_col %}<td>{{ row.student_name }}</td>{% endif %}
-              <td>{{ row.subject_name }}</td>
-              <td><strong>{{ row.value }}/20</strong></td>
-              <td>{{ row.teacher_name }}</td>
-              <td>{{ row.comment or '-' }}</td>
-              <td>{{ row.created_at }}</td>
-            </tr>
-            {% else %}
-            <tr><td colspan='6'>Aucune note.</td></tr>
-            {% endfor %}
+              <tr>
+                {% if show_student_col %}<td>{{ row.student_name }}</td>{% endif %}
+                <td>{{ row.subject_name }}</td><td><strong>{{ row.value }}/20</strong></td><td>{{ row.teacher_name }}</td><td>{{ row.comment or '-' }}</td><td>{{ row.created_at }}</td>
+              </tr>
+            {% else %}<tr><td colspan='6'>Aucune note.</td></tr>{% endfor %}
           </tbody>
         </table>
       </div>
       <div class='card'>
         <h2>Moyennes automatiques</h2>
         <table>
-          <thead>
-            <tr>
-              {% if show_student_col %}<th>Élève</th>{% endif %}
-              <th>Matière</th>
-              <th>Moyenne</th>
-            </tr>
-          </thead>
+          <thead><tr>{% if show_student_col %}<th>Élève</th>{% endif %}<th>Matière</th><th>Moyenne</th></tr></thead>
           <tbody>
             {% for avg in averages %}
-            <tr>
-              {% if show_student_col %}<td>{{ avg.student_name }}</td>{% endif %}
-              <td>{{ avg.subject_name }}</td>
-              <td><strong>{{ avg.average_value }}/20</strong></td>
-            </tr>
-            {% else %}
-            <tr><td colspan='3'>Aucune moyenne disponible.</td></tr>
-            {% endfor %}
+              <tr>{% if show_student_col %}<td>{{ avg.student_name }}</td>{% endif %}<td>{{ avg.subject_name }}</td><td><strong>{{ avg.average_value }}/20</strong></td></tr>
+            {% else %}<tr><td colspan='3'>Aucune moyenne disponible.</td></tr>{% endfor %}
           </tbody>
         </table>
       </div>
@@ -951,19 +935,12 @@ def grades():
 @login_required
 @role_required("prof", "admin")
 def add_grade():
-    students = query_all(
-        "SELECT u.id, u.full_name, c.name AS class_name FROM users u LEFT JOIN classes c ON c.id=u.class_id WHERE role='eleve' ORDER BY u.full_name"
-    )
+    students = query_all("SELECT u.id, u.full_name, c.name AS class_name FROM users u LEFT JOIN classes c ON c.id=u.class_id WHERE role='eleve' ORDER BY u.full_name")
     subjects = query_all("SELECT id, name FROM subjects ORDER BY name")
 
     if request.method == "POST":
-        student_id = request.form.get("student_id")
-        subject_id = request.form.get("subject_id")
-        value = request.form.get("value")
-        comment = request.form.get("comment", "").strip()
-
         try:
-            value_float = float(value)
+            value_float = float(request.form.get("value"))
             if value_float < 0 or value_float > 20:
                 raise ValueError
         except Exception:
@@ -972,7 +949,14 @@ def add_grade():
 
         execute_db(
             "INSERT INTO grades (student_id, subject_id, teacher_id, value, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (student_id, subject_id, g.user["id"], value_float, comment, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            (
+                request.form.get("student_id"),
+                request.form.get("subject_id"),
+                g.user["id"],
+                value_float,
+                request.form.get("comment", "").strip(),
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            ),
         )
         flash("Note ajoutée.")
         return redirect(url_for("grades"))
@@ -982,17 +966,9 @@ def add_grade():
       <h1>Ajouter une note</h1>
       <form method='post'>
         <label>Élève</label>
-        <select name='student_id' required>
-          {% for s in students %}
-            <option value='{{ s.id }}'>{{ s.full_name }}{% if s.class_name %} - {{ s.class_name }}{% endif %}</option>
-          {% endfor %}
-        </select>
+        <select name='student_id' required>{% for s in students %}<option value='{{ s.id }}'>{{ s.full_name }}{% if s.class_name %} - {{ s.class_name }}{% endif %}</option>{% endfor %}</select>
         <label>Matière</label>
-        <select name='subject_id' required>
-          {% for s in subjects %}
-            <option value='{{ s.id }}'>{{ s.name }}</option>
-          {% endfor %}
-        </select>
+        <select name='subject_id' required>{% for s in subjects %}<option value='{{ s.id }}'>{{ s.name }}</option>{% endfor %}</select>
         <label>Note sur 20</label>
         <input name='value' type='number' step='0.1' min='0' max='20' required>
         <label>Commentaire</label>
@@ -1019,30 +995,34 @@ def homework_page():
             flash("Accès refusé.")
             return redirect(url_for("homework_page"))
 
-        subject_id = request.form.get("subject_id")
-        class_id = request.form.get("class_id") or None
         title = request.form.get("title", "").strip()
         description = request.form.get("description", "").strip()
         due_date = request.form.get("due_date", "").strip()
-
         if not title or not description or not due_date:
             flash("Remplis tous les champs du devoir.")
             return redirect(url_for("homework_page"))
 
         execute_db(
             "INSERT INTO homework (class_id, subject_id, teacher_id, title, description, due_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (class_id, subject_id, user["id"], title, description, due_date, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            (
+                request.form.get("class_id") or None,
+                request.form.get("subject_id"),
+                user["id"],
+                title,
+                description,
+                due_date,
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            ),
         )
         flash("Devoir ajouté.")
         return redirect(url_for("homework_page"))
 
     if user["role"] == "eleve":
-        target_class_ids = [user["class_id"]] if user["class_id"] else []
+        target_class_ids = [user["class_id"]] if user.get("class_id") else []
     elif user["role"] == "parent":
-        children = get_parent_children(user)
         target_class_ids = []
-        for child in children:
-            if child["class_id"] and child["class_id"] not in target_class_ids:
+        for child in get_parent_children(user):
+            if child.get("class_id") and child["class_id"] not in target_class_ids:
                 target_class_ids.append(child["class_id"])
     else:
         target_class_ids = []
@@ -1053,9 +1033,7 @@ def homework_page():
             items = query_all(
                 f"""
                 SELECT h.*, s.name AS subject_name, u.full_name AS teacher_name, c.name AS class_name
-                FROM homework h
-                JOIN subjects s ON s.id = h.subject_id
-                JOIN users u ON u.id = h.teacher_id
+                FROM homework h JOIN subjects s ON s.id = h.subject_id JOIN users u ON u.id = h.teacher_id
                 LEFT JOIN classes c ON c.id = h.class_id
                 WHERE h.class_id IS NULL OR h.class_id IN ({placeholders})
                 ORDER BY h.due_date ASC
@@ -1063,27 +1041,20 @@ def homework_page():
                 tuple(target_class_ids),
             )
         else:
-            items = []
+            items = query_all(
+                """
+                SELECT h.*, s.name AS subject_name, u.full_name AS teacher_name, c.name AS class_name
+                FROM homework h JOIN subjects s ON s.id = h.subject_id JOIN users u ON u.id = h.teacher_id
+                LEFT JOIN classes c ON c.id = h.class_id
+                WHERE h.class_id IS NULL
+                ORDER BY h.due_date ASC
+                """
+            )
     else:
         items = query_all(
             """
             SELECT h.*, s.name AS subject_name, u.full_name AS teacher_name, c.name AS class_name
-            FROM homework h
-            JOIN subjects s ON s.id = h.subject_id
-            JOIN users u ON u.id = h.teacher_id
-            LEFT JOIN classes c ON c.id = h.class_id
-            WHERE h.class_id IS NULL OR h.class_id = ?
-            ORDER BY h.due_date ASC
-            """,
-            (target_class_id,),
-        )
-    else:
-        items = query_all(
-            """
-            SELECT h.*, s.name AS subject_name, u.full_name AS teacher_name, c.name AS class_name
-            FROM homework h
-            JOIN subjects s ON s.id = h.subject_id
-            JOIN users u ON u.id = h.teacher_id
+            FROM homework h JOIN subjects s ON s.id = h.subject_id JOIN users u ON u.id = h.teacher_id
             LEFT JOIN classes c ON c.id = h.class_id
             ORDER BY h.due_date ASC
             """
@@ -1096,20 +1067,12 @@ def homework_page():
         <h2>Ajouter un devoir</h2>
         <form method='post'>
           <label>Classe</label>
-          <select name='class_id'>
-            <option value=''>Toutes les classes</option>
-            {% for c in classes %}<option value='{{ c.id }}'>{{ c.name }}</option>{% endfor %}
-          </select>
+          <select name='class_id'><option value=''>Toutes les classes</option>{% for c in classes %}<option value='{{ c.id }}'>{{ c.name }}</option>{% endfor %}</select>
           <label>Matière</label>
-          <select name='subject_id' required>
-            {% for s in subjects %}<option value='{{ s.id }}'>{{ s.name }}</option>{% endfor %}
-          </select>
-          <label>Titre</label>
-          <input name='title' required>
-          <label>Description</label>
-          <textarea name='description' required></textarea>
-          <label>Date limite</label>
-          <input type='date' name='due_date' required>
+          <select name='subject_id' required>{% for s in subjects %}<option value='{{ s.id }}'>{{ s.name }}</option>{% endfor %}</select>
+          <label>Titre</label><input name='title' required>
+          <label>Description</label><textarea name='description' required></textarea>
+          <label>Date limite</label><input type='date' name='due_date' required>
           <button type='submit'>Publier</button>
         </form>
       </div>
@@ -1118,16 +1081,11 @@ def homework_page():
         <h1>Devoirs</h1>
         {% for item in items %}
           <div style='border:1px solid #e5ebf5; border-radius:16px; padding:16px; margin-bottom:14px;'>
-            <div style='display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;'>
-              <strong>{{ item.title }}</strong>
-              <span class='badge'>{{ item.subject_name }}</span>
-            </div>
+            <div style='display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap;'><strong>{{ item.title }}</strong><span class='badge'>{{ item.subject_name }}</span></div>
             <p>{{ item.description }}</p>
             <p class='muted'>Classe : {{ item.class_name or 'Toutes' }} · Professeur : {{ item.teacher_name }} · Date limite : {{ item.due_date }}</p>
           </div>
-        {% else %}
-          <p>Aucun devoir.</p>
-        {% endfor %}
+        {% else %}<p>Aucun devoir.</p>{% endfor %}
       </div>
     </div>
     """
@@ -1153,12 +1111,8 @@ def schedule_page():
         execute_db(
             "INSERT INTO schedules (class_id, subject_id, teacher_id, day_name, start_time, end_time, room) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
-                request.form.get("class_id"),
-                request.form.get("subject_id"),
-                request.form.get("teacher_id"),
-                request.form.get("day_name"),
-                request.form.get("start_time"),
-                request.form.get("end_time"),
+                request.form.get("class_id"), request.form.get("subject_id"), request.form.get("teacher_id"),
+                request.form.get("day_name"), request.form.get("start_time"), request.form.get("end_time"),
                 request.form.get("room", "").strip(),
             ),
         )
@@ -1166,12 +1120,11 @@ def schedule_page():
         return redirect(url_for("schedule_page"))
 
     if user["role"] == "eleve":
-        target_class_ids = [user["class_id"]] if user["class_id"] else []
+        target_class_ids = [user["class_id"]] if user.get("class_id") else []
     elif user["role"] == "parent":
-        children = get_parent_children(user)
         target_class_ids = []
-        for child in children:
-            if child["class_id"] and child["class_id"] not in target_class_ids:
+        for child in get_parent_children(user):
+            if child.get("class_id") and child["class_id"] not in target_class_ids:
                 target_class_ids.append(child["class_id"])
     else:
         target_class_ids = []
@@ -1182,16 +1135,11 @@ def schedule_page():
             rows = query_all(
                 f"""
                 SELECT sc.id, sc.day_name, sc.start_time, sc.end_time, sc.room, s.name AS subject_name, u.full_name AS teacher_name, c.name AS class_name
-                FROM schedules sc
-                JOIN subjects s ON s.id = sc.subject_id
-                JOIN users u ON u.id = sc.teacher_id
-                JOIN classes c ON c.id = sc.class_id
+                FROM schedules sc JOIN subjects s ON s.id = sc.subject_id JOIN users u ON u.id = sc.teacher_id JOIN classes c ON c.id = sc.class_id
                 WHERE sc.class_id IN ({placeholders})
                 ORDER BY c.name,
-                         CASE sc.day_name
-                            WHEN 'Lundi' THEN 1 WHEN 'Mardi' THEN 2 WHEN 'Mercredi' THEN 3
-                            WHEN 'Jeudi' THEN 4 WHEN 'Vendredi' THEN 5 ELSE 6 END,
-                         sc.start_time
+                  CASE sc.day_name WHEN 'Lundi' THEN 1 WHEN 'Mardi' THEN 2 WHEN 'Mercredi' THEN 3 WHEN 'Jeudi' THEN 4 WHEN 'Vendredi' THEN 5 ELSE 6 END,
+                  sc.start_time
                 """,
                 tuple(target_class_ids),
             )
@@ -1201,30 +1149,10 @@ def schedule_page():
         rows = query_all(
             """
             SELECT sc.id, sc.day_name, sc.start_time, sc.end_time, sc.room, s.name AS subject_name, u.full_name AS teacher_name, c.name AS class_name
-            FROM schedules sc
-            JOIN subjects s ON s.id = sc.subject_id
-            JOIN users u ON u.id = sc.teacher_id
-            JOIN classes c ON c.id = sc.class_id
-            WHERE sc.class_id = ?
-            ORDER BY CASE sc.day_name
-                WHEN 'Lundi' THEN 1 WHEN 'Mardi' THEN 2 WHEN 'Mercredi' THEN 3
-                WHEN 'Jeudi' THEN 4 WHEN 'Vendredi' THEN 5 ELSE 6 END, sc.start_time
-            """,
-            (target_class_id,),
-        )
-    else:
-        rows = query_all(
-            """
-            SELECT sc.id, sc.day_name, sc.start_time, sc.end_time, sc.room, s.name AS subject_name, u.full_name AS teacher_name, c.name AS class_name
-            FROM schedules sc
-            JOIN subjects s ON s.id = sc.subject_id
-            JOIN users u ON u.id = sc.teacher_id
-            JOIN classes c ON c.id = sc.class_id
+            FROM schedules sc JOIN subjects s ON s.id = sc.subject_id JOIN users u ON u.id = sc.teacher_id JOIN classes c ON c.id = sc.class_id
             ORDER BY c.name,
-                     CASE sc.day_name
-                        WHEN 'Lundi' THEN 1 WHEN 'Mardi' THEN 2 WHEN 'Mercredi' THEN 3
-                        WHEN 'Jeudi' THEN 4 WHEN 'Vendredi' THEN 5 ELSE 6 END,
-                     sc.start_time
+              CASE sc.day_name WHEN 'Lundi' THEN 1 WHEN 'Mardi' THEN 2 WHEN 'Mercredi' THEN 3 WHEN 'Jeudi' THEN 4 WHEN 'Vendredi' THEN 5 ELSE 6 END,
+              sc.start_time
             """
         )
 
@@ -1234,22 +1162,13 @@ def schedule_page():
       <div class='card'>
         <h2>Ajouter un cours</h2>
         <form method='post'>
-          <label>Classe</label>
-          <select name='class_id' required>{% for c in classes %}<option value='{{ c.id }}'>{{ c.name }}</option>{% endfor %}</select>
-          <label>Matière</label>
-          <select name='subject_id' required>{% for s in subjects %}<option value='{{ s.id }}'>{{ s.name }}</option>{% endfor %}</select>
-          <label>Professeur</label>
-          <select name='teacher_id' required>{% for t in teachers %}<option value='{{ t.id }}'>{{ t.full_name }}</option>{% endfor %}</select>
-          <label>Jour</label>
-          <select name='day_name' required>
-            <option>Lundi</option><option>Mardi</option><option>Mercredi</option><option>Jeudi</option><option>Vendredi</option>
-          </select>
-          <label>Début</label>
-          <input type='time' name='start_time' required>
-          <label>Fin</label>
-          <input type='time' name='end_time' required>
-          <label>Salle</label>
-          <input name='room'>
+          <label>Classe</label><select name='class_id' required>{% for c in classes %}<option value='{{ c.id }}'>{{ c.name }}</option>{% endfor %}</select>
+          <label>Matière</label><select name='subject_id' required>{% for s in subjects %}<option value='{{ s.id }}'>{{ s.name }}</option>{% endfor %}</select>
+          <label>Professeur</label><select name='teacher_id' required>{% for t in teachers %}<option value='{{ t.id }}'>{{ t.full_name }}</option>{% endfor %}</select>
+          <label>Jour</label><select name='day_name' required><option>Lundi</option><option>Mardi</option><option>Mercredi</option><option>Jeudi</option><option>Vendredi</option></select>
+          <label>Début</label><input type='time' name='start_time' required>
+          <label>Fin</label><input type='time' name='end_time' required>
+          <label>Salle</label><input name='room'>
           <button type='submit'>Ajouter</button>
         </form>
       </div>
@@ -1259,18 +1178,8 @@ def schedule_page():
         <table>
           <thead><tr><th>Classe</th><th>Jour</th><th>Horaire</th><th>Matière</th><th>Prof</th><th>Salle</th></tr></thead>
           <tbody>
-          {% for r in rows %}
-            <tr>
-              <td>{{ r.class_name }}</td>
-              <td>{{ r.day_name }}</td>
-              <td>{{ r.start_time }} - {{ r.end_time }}</td>
-              <td>{{ r.subject_name }}</td>
-              <td>{{ r.teacher_name }}</td>
-              <td>{{ r.room or '-' }}</td>
-            </tr>
-          {% else %}
-            <tr><td colspan='6'>Aucun cours programmé.</td></tr>
-          {% endfor %}
+            {% for r in rows %}<tr><td>{{ r.class_name }}</td><td>{{ r.day_name }}</td><td>{{ r.start_time }} - {{ r.end_time }}</td><td>{{ r.subject_name }}</td><td>{{ r.teacher_name }}</td><td>{{ r.room or '-' }}</td></tr>
+            {% else %}<tr><td colspan='6'>Aucun cours programmé.</td></tr>{% endfor %}
           </tbody>
         </table>
       </div>
@@ -1295,23 +1204,13 @@ def absences_page():
 
         execute_db(
             "INSERT INTO absences (student_id, teacher_id, absence_date, reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                request.form.get("student_id"),
-                user["id"],
-                request.form.get("absence_date"),
-                request.form.get("reason", "").strip(),
-                request.form.get("status"),
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            ),
+            (request.form.get("student_id"), user["id"], request.form.get("absence_date"), request.form.get("reason", "").strip(), request.form.get("status"), datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
         )
         flash("Absence enregistrée.")
         return redirect(url_for("absences_page"))
 
     if user["role"] == "eleve":
-        rows = query_all(
-            "SELECT a.*, u.full_name AS teacher_name FROM absences a JOIN users u ON u.id=a.teacher_id WHERE student_id=? ORDER BY absence_date DESC",
-            (user["id"],),
-        )
+        rows = query_all("SELECT a.*, u.full_name AS teacher_name FROM absences a JOIN users u ON u.id=a.teacher_id WHERE student_id=? ORDER BY absence_date DESC", (user["id"],))
     elif user["role"] == "parent":
         children = get_parent_children(user)
         if children:
@@ -1320,12 +1219,9 @@ def absences_page():
             rows = query_all(
                 f"""
                 SELECT a.*, u.full_name AS teacher_name, s.full_name AS student_name, c.name AS class_name
-                FROM absences a
-                JOIN users u ON u.id = a.teacher_id
-                JOIN users s ON s.id = a.student_id
+                FROM absences a JOIN users u ON u.id = a.teacher_id JOIN users s ON s.id = a.student_id
                 LEFT JOIN classes c ON c.id = s.class_id
-                WHERE a.student_id IN ({placeholders})
-                ORDER BY absence_date DESC
+                WHERE a.student_id IN ({placeholders}) ORDER BY absence_date DESC
                 """,
                 tuple(child_ids),
             )
@@ -1335,11 +1231,8 @@ def absences_page():
         rows = query_all(
             """
             SELECT a.*, s.full_name AS student_name, t.full_name AS teacher_name, c.name AS class_name
-            FROM absences a
-            JOIN users s ON s.id = a.student_id
-            JOIN users t ON t.id = a.teacher_id
-            LEFT JOIN classes c ON c.id = s.class_id
-            ORDER BY a.absence_date DESC
+            FROM absences a JOIN users s ON s.id = a.student_id JOIN users t ON t.id = a.teacher_id
+            LEFT JOIN classes c ON c.id = s.class_id ORDER BY a.absence_date DESC
             """
         )
 
@@ -1349,21 +1242,10 @@ def absences_page():
       <div class='card'>
         <h2>Ajouter une absence</h2>
         <form method='post'>
-          <label>Élève</label>
-          <select name='student_id' required>
-            {% for s in students %}
-              <option value='{{ s.id }}'>{{ s.full_name }}{% if s.class_name %} - {{ s.class_name }}{% endif %}</option>
-            {% endfor %}
-          </select>
-          <label>Date</label>
-          <input type='date' name='absence_date' required>
-          <label>Motif</label>
-          <textarea name='reason'></textarea>
-          <label>Statut</label>
-          <select name='status' required>
-            <option>Non justifiée</option>
-            <option>Justifiée</option>
-          </select>
+          <label>Élève</label><select name='student_id' required>{% for s in students %}<option value='{{ s.id }}'>{{ s.full_name }}{% if s.class_name %} - {{ s.class_name }}{% endif %}</option>{% endfor %}</select>
+          <label>Date</label><input type='date' name='absence_date' required>
+          <label>Motif</label><textarea name='reason'></textarea>
+          <label>Statut</label><select name='status' required><option>Non justifiée</option><option>Justifiée</option></select>
           <button type='submit'>Enregistrer</button>
         </form>
       </div>
@@ -1371,21 +1253,11 @@ def absences_page():
       <div class='card'>
         <h1>Absences</h1>
         <table>
-          <thead>
-            <tr>{% if user.role in ['admin','prof','parent'] %}<th>Élève</th><th>Classe</th>{% endif %}<th>Date</th><th>Motif</th><th>Statut</th><th>Déclarée par</th></tr>
-          </thead>
+          <thead><tr>{% if user.role in ['admin','prof','parent'] %}<th>Élève</th><th>Classe</th>{% endif %}<th>Date</th><th>Motif</th><th>Statut</th><th>Déclarée par</th></tr></thead>
           <tbody>
-          {% for r in rows %}
-            <tr>
-              {% if user.role in ['admin','prof','parent'] %}<td>{{ r.student_name }}</td><td>{{ r.class_name or '-' }}</td>{% endif %}
-              <td>{{ r.absence_date }}</td>
-              <td>{{ r.reason or '-' }}</td>
-              <td>{{ r.status }}</td>
-              <td>{{ r.teacher_name }}</td>
-            </tr>
-          {% else %}
-            <tr><td colspan='6'>Aucune absence.</td></tr>
-          {% endfor %}
+            {% for r in rows %}
+              <tr>{% if user.role in ['admin','prof','parent'] %}<td>{{ r.student_name }}</td><td>{{ r.class_name or '-' }}</td>{% endif %}<td>{{ r.absence_date }}</td><td>{{ r.reason or '-' }}</td><td>{{ r.status }}</td><td>{{ r.teacher_name }}</td></tr>
+            {% else %}<tr><td colspan='6'>Aucune absence.</td></tr>{% endfor %}
           </tbody>
         </table>
       </div>
@@ -1422,7 +1294,6 @@ def messages_page():
         receiver_id = request.form.get("receiver_id")
         subject = request.form.get("subject", "").strip()
         body = request.form.get("body", "").strip()
-
         if not receiver_id or not subject or not body:
             flash("Remplis tous les champs du message.")
             return redirect(url_for("messages_page"))
@@ -1437,11 +1308,8 @@ def messages_page():
     inbox = query_all(
         """
         SELECT m.*, s.full_name AS sender_name, r.full_name AS receiver_name
-        FROM messages m
-        JOIN users s ON s.id = m.sender_id
-        JOIN users r ON r.id = m.receiver_id
-        WHERE m.receiver_id = ? OR m.sender_id = ?
-        ORDER BY m.id DESC
+        FROM messages m JOIN users s ON s.id = m.sender_id JOIN users r ON r.id = m.receiver_id
+        WHERE m.receiver_id = ? OR m.sender_id = ? ORDER BY m.id DESC
         """,
         (user["id"], user["id"]),
     )
@@ -1451,28 +1319,16 @@ def messages_page():
       <div class='card'>
         <h2>Nouveau message</h2>
         <form method='post'>
-          <label>Destinataire</label>
-          <select name='receiver_id' required>
-            {% for c in contacts %}<option value='{{ c.id }}'>{{ c.full_name }} ({{ c.role }})</option>{% endfor %}
-          </select>
-          <label>Sujet</label>
-          <input name='subject' required>
-          <label>Message</label>
-          <textarea name='body' required></textarea>
+          <label>Destinataire</label><select name='receiver_id' required>{% for c in contacts %}<option value='{{ c.id }}'>{{ c.full_name }} ({{ c.role }})</option>{% endfor %}</select>
+          <label>Sujet</label><input name='subject' required>
+          <label>Message</label><textarea name='body' required></textarea>
           <button type='submit'>Envoyer</button>
         </form>
       </div>
       <div class='card'>
         <h1>Messagerie</h1>
-        {% for m in inbox %}
-          <div style='border:1px solid #e6edf8; border-radius:16px; padding:14px; margin-bottom:12px;'>
-            <strong>{{ m.subject }}</strong>
-            <p style='margin:8px 0;'>{{ m.body }}</p>
-            <p class='muted small'>De {{ m.sender_name }} à {{ m.receiver_name }} · {{ m.created_at }}</p>
-          </div>
-        {% else %}
-          <p>Aucun message.</p>
-        {% endfor %}
+        {% for m in inbox %}<div style='border:1px solid #e6edf8; border-radius:16px; padding:14px; margin-bottom:12px;'><strong>{{ m.subject }}</strong><p style='margin:8px 0;'>{{ m.body }}</p><p class='muted small'>De {{ m.sender_name }} à {{ m.receiver_name }} · {{ m.created_at }}</p></div>
+        {% else %}<p>Aucun message.</p>{% endfor %}
       </div>
     </div>
     """
@@ -1502,11 +1358,9 @@ def manage_users():
         if not username or not password or not full_name or role not in ["admin", "prof", "eleve", "parent"]:
             flash("Champs invalides.")
             return redirect(url_for("manage_users"))
-
         if user["role"] == "prof" and role == "admin":
             flash("Un professeur ne peut pas créer un compte admin.")
             return redirect(url_for("manage_users"))
-
         if role == "parent" and not child_id and not child_id_2:
             flash("Un parent doit être lié à au moins un élève.")
             return redirect(url_for("manage_users"))
@@ -1526,15 +1380,14 @@ def manage_users():
                 (username, generate_password_hash(password), role, full_name, class_id, child_id, child_id_2),
             )
             flash("Utilisateur ajouté.")
-        except sqlite3.IntegrityError:
+        except Exception:
             flash("Nom d'utilisateur déjà utilisé.")
         return redirect(url_for("manage_users"))
 
     users = query_all(
         """
         SELECT u.id, u.username, u.full_name, u.role, c.name AS class_name,
-               child.full_name AS child_name,
-               child2.full_name AS child_name_2
+               child.full_name AS child_name, child2.full_name AS child_name_2
         FROM users u
         LEFT JOIN classes c ON c.id = u.class_id
         LEFT JOIN users child ON child.id = u.child_id
@@ -1548,15 +1401,9 @@ def manage_users():
       <div class='card'>
         <h1>Créer un compte</h1>
         <form method='post' autocomplete='off'>
-          <label>Nom complet</label>
-          <input name='full_name' required>
-
-          <label>Nom d'utilisateur</label>
-          <input name='username' required>
-
-          <label>Mot de passe</label>
-          <input name='password' required>
-
+          <label>Nom complet</label><input name='full_name' required>
+          <label>Nom d'utilisateur</label><input name='username' required>
+          <label>Mot de passe</label><input name='password' required>
           <label>Rôle</label>
           <select name='role' id='manage_role_select' required onchange='toggleManageFields()'>
             <option value='eleve'>Élève</option>
@@ -1564,73 +1411,34 @@ def manage_users():
             <option value='parent'>Parent</option>
             {% if user.role == 'admin' %}<option value='admin'>Admin</option>{% endif %}
           </select>
-
           <div id='manage_class_block'>
             <label>Classe</label>
-            <select name='class_id'>
-              <option value=''>Aucune</option>
-              {% for c in classes %}
-                <option value='{{ c.id }}'>{{ c.name }}</option>
-              {% endfor %}
-            </select>
+            <select name='class_id'><option value=''>Aucune</option>{% for c in classes %}<option value='{{ c.id }}'>{{ c.name }}</option>{% endfor %}</select>
           </div>
-
           <div id='manage_child_block' style='display:none;'>
-            <label>Enfant lié (si parent)</label>
-            <select name='child_id'>
-              <option value=''>Aucun</option>
-              {% for s in students %}
-                <option value='{{ s.id }}'>{{ s.full_name }}</option>
-              {% endfor %}
-            </select>
+            <label>Enfant lié 1</label>
+            <select name='child_id'><option value=''>Aucun</option>{% for s in students %}<option value='{{ s.id }}'>{{ s.full_name }}</option>{% endfor %}</select>
+            <label>Enfant lié 2</label>
+            <select name='child_id_2'><option value=''>Aucun</option>{% for s in students %}<option value='{{ s.id }}'>{{ s.full_name }}</option>{% endfor %}</select>
           </div>
-
           <button type='submit'>Créer</button>
         </form>
       </div>
-
       <div class='card'>
         <h2>Liste des utilisateurs</h2>
         <table>
-          <thead>
-            <tr>
-              <th>ID</th>
-              <th>Nom</th>
-              <th>Utilisateur</th>
-              <th>Rôle</th>
-              <th>Classe</th>
-              <th>Enfant lié 1</th><th>Enfant lié 2</th>
-            </tr>
-          </thead>
+          <thead><tr><th>ID</th><th>Nom</th><th>Utilisateur</th><th>Rôle</th><th>Classe</th><th>Enfant lié 1</th><th>Enfant lié 2</th></tr></thead>
           <tbody>
-            {% for u in users %}
-              <tr>
-                <td>{{ u.id }}</td>
-                <td>{{ u.full_name }}</td>
-                <td>{{ u.username }}</td>
-                <td>{{ u.role }}</td>
-                <td>{{ u.class_name or '-' }}</td>
-                <td>{{ u.child_name or '-' }}</td><td>{{ u.child_name_2 or '-' }}</td>
-              </tr>
-            {% endfor %}
+            {% for u in users %}<tr><td>{{ u.id }}</td><td>{{ u.full_name }}</td><td>{{ u.username }}</td><td>{{ u.role }}</td><td>{{ u.class_name or '-' }}</td><td>{{ u.child_name or '-' }}</td><td>{{ u.child_name_2 or '-' }}</td></tr>{% endfor %}
           </tbody>
         </table>
       </div>
     </div>
-
     <script>
       function toggleManageFields() {
         const role = document.getElementById('manage_role_select').value;
-        const classBlock = document.getElementById('manage_class_block');
-        const childBlock = document.getElementById('manage_child_block');
-
-        if (role === 'parent') {
-          classBlock.style.display = 'none';
-          childBlock.style.display = 'block';
-        } else {
-          classBlock.style.display = 'block';
-          childBlock.style.display = 'none';
-        }
+        document.getElementById('manage_class_block').style.display = role === 'parent' ? 'none' : 'block';
+        document.getElementById('manage_child_block').style.display = role === 'parent' ? 'block' : 'none';
       }
       toggleManageFields();
     </script>
@@ -1647,20 +1455,15 @@ def manage_users():
 def manage_school():
     if request.method == "POST":
         form_type = request.form.get("form_type")
-
         if form_type in ["class", "subject"]:
             name = request.form.get("name", "").strip()
             if not name:
                 flash("Nom invalide.")
                 return redirect(url_for("manage_school"))
             try:
-                if form_type == "class":
-                    execute_db("INSERT INTO classes (name) VALUES (?)", (name,))
-                    flash("Classe ajoutée.")
-                elif form_type == "subject":
-                    execute_db("INSERT INTO subjects (name) VALUES (?)", (name,))
-                    flash("Matière ajoutée.")
-            except sqlite3.IntegrityError:
+                execute_db("INSERT INTO classes (name) VALUES (?)" if form_type == "class" else "INSERT INTO subjects (name) VALUES (?)", (name,))
+                flash("Classe ajoutée." if form_type == "class" else "Matière ajoutée.")
+            except Exception:
                 flash("Ce nom existe déjà.")
             return redirect(url_for("manage_school"))
 
@@ -1690,65 +1493,26 @@ def manage_school():
 
     classes = query_all("SELECT * FROM classes ORDER BY name")
     subjects = query_all("SELECT * FROM subjects ORDER BY name")
-
     content = """
-    <div class='hero'>
-      <h1>Gestion de l'école</h1>
-      <p>Ajoute ou supprime des classes et des matières depuis cette page.</p>
-    </div>
-
+    <div class='hero'><h1>Gestion de l'école</h1><p>Ajoute ou supprime des classes et des matières depuis cette page.</p></div>
     <div class='grid'>
       <div class='card'>
         <h2>Ajouter une classe</h2>
-        <form method='post'>
-          <input type='hidden' name='form_type' value='class'>
-          <label>Nom de la classe</label>
-          <input name='name' placeholder='6A' required>
-          <button type='submit'>Ajouter la classe</button>
-        </form>
+        <form method='post'><input type='hidden' name='form_type' value='class'><label>Nom de la classe</label><input name='name' placeholder='6A' required><button type='submit'>Ajouter la classe</button></form>
       </div>
       <div class='card'>
         <h2>Ajouter une matière</h2>
-        <form method='post'>
-          <input type='hidden' name='form_type' value='subject'>
-          <label>Nom de la matière</label>
-          <input name='name' placeholder='Physique' required>
-          <button type='submit'>Ajouter la matière</button>
-        </form>
+        <form method='post'><input type='hidden' name='form_type' value='subject'><label>Nom de la matière</label><input name='name' placeholder='Physique' required><button type='submit'>Ajouter la matière</button></form>
       </div>
     </div>
-
     <div class='grid' style='margin-top:18px;'>
       <div class='card'>
         <h2>Classes</h2>
-        {% for c in classes %}
-          <div style='display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid #eef3fb;'>
-            <div><strong>{{ c.name }}</strong></div>
-            <form method='post' style='margin:0;'>
-              <input type='hidden' name='form_type' value='delete_class'>
-              <input type='hidden' name='class_id' value='{{ c.id }}'>
-              <button type='submit' class='danger'>Supprimer</button>
-            </form>
-          </div>
-        {% else %}
-          <p class='muted'>Aucune classe.</p>
-        {% endfor %}
+        {% for c in classes %}<div style='display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid #eef3fb;'><div><strong>{{ c.name }}</strong></div><form method='post' style='margin:0;'><input type='hidden' name='form_type' value='delete_class'><input type='hidden' name='class_id' value='{{ c.id }}'><button type='submit' class='danger'>Supprimer</button></form></div>{% else %}<p class='muted'>Aucune classe.</p>{% endfor %}
       </div>
-
       <div class='card'>
         <h2>Matières</h2>
-        {% for s in subjects %}
-          <div style='display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid #eef3fb;'>
-            <div><strong>{{ s.name }}</strong></div>
-            <form method='post' style='margin:0;'>
-              <input type='hidden' name='form_type' value='delete_subject'>
-              <input type='hidden' name='subject_id' value='{{ s.id }}'>
-              <button type='submit' class='danger'>Supprimer</button>
-            </form>
-          </div>
-        {% else %}
-          <p class='muted'>Aucune matière.</p>
-        {% endfor %}
+        {% for s in subjects %}<div style='display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid #eef3fb;'><div><strong>{{ s.name }}</strong></div><form method='post' style='margin:0;'><input type='hidden' name='form_type' value='delete_subject'><input type='hidden' name='subject_id' value='{{ s.id }}'><button type='submit' class='danger'>Supprimer</button></form></div>{% else %}<p class='muted'>Aucune matière.</p>{% endfor %}
       </div>
     </div>
     """
@@ -1763,17 +1527,10 @@ def add_no_cache_headers(response):
     return response
 
 
-# Initialisation base
 with app.app_context():
     init_db()
 
-# Lancement serveur
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(
-        host="0.0.0.0",
-        port=port,
-        debug=False,
-        use_reloader=False
-    )
-
+    app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
