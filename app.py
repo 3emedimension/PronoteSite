@@ -34,7 +34,7 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 USE_POSTGRES = bool(DATABASE_URL and psycopg2)
 DB_NAME = "mini_pronote_v8.db"
 ADMIN_DEFAULT_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Azsqerfd2012")
-SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "MonSuperMotDePasse123")
+SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "EcoleR2026")
 
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -1644,3 +1644,4 @@ with app.app_context():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
+
