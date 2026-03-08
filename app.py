@@ -921,90 +921,57 @@ def dashboard():
 def grades():
     user = g.user
 
-    rows = []
-    averages = []
-    show_student_col = False
-
     if user["role"] == "eleve":
         rows = query_all(
             """
-            SELECT g.id, g.value, g.comment, g.created_at,
-                   s.name AS subject_name,
-                   u.full_name AS teacher_name
-            FROM grades g
-            JOIN subjects s ON s.id = g.subject_id
-            JOIN users u ON u.id = g.teacher_id
-            WHERE g.student_id = ?
-            ORDER BY g.id DESC
+            SELECT g.id, g.value, g.comment, g.created_at, s.name AS subject_name, u.full_name AS teacher_name
+            FROM grades g JOIN subjects s ON s.id = g.subject_id JOIN users u ON u.id = g.teacher_id
+            WHERE g.student_id = ? ORDER BY g.id DESC
             """,
             (user["id"],),
         )
         averages = query_all(
             """
-            SELECT s.name AS subject_name,
-                   ROUND(AVG(g.value), 2) AS average_value
-            FROM grades g
-            JOIN subjects s ON s.id = g.subject_id
-            WHERE g.student_id = ?
-            GROUP BY s.name
-            ORDER BY s.name
+            SELECT s.name AS subject_name, ROUND(AVG(g.value), 2) AS average_value
+            FROM grades g JOIN subjects s ON s.id = g.subject_id
+            WHERE g.student_id = ? GROUP BY s.name ORDER BY s.name
             """,
             (user["id"],),
         )
-
+        show_student_col = False
     elif user["role"] == "parent":
         children = get_parent_children(user)
         if not children:
-            content = """
-            <div class='card'>
-              <h1>Notes</h1>
-              <p>Aucun enfant lié à ce compte parent.</p>
-            </div>
-            """
-            return render_page(content, title="Notes")
-
-        child_ids = [child["id"] for child in children]
-        placeholders = ",".join(["?"] * len(child_ids))
-        show_student_col = True
-
+            return render_page("<div class='card'><h1>Notes</h1><p>Aucun enfant lié à ce compte parent.</p></div>", title="Notes")
+        student_ids = [child["id"] for child in children]
+        placeholders = ",".join(["?"] * len(student_ids))
         rows = query_all(
             f"""
-            SELECT g.id, g.value, g.comment, g.created_at,
-                   s.name AS subject_name,
-                   tea.full_name AS teacher_name,
-                   stu.full_name AS student_name
+            SELECT g.id, g.value, g.comment, g.created_at, s.name AS subject_name,
+                   u.full_name AS teacher_name, stu.full_name AS student_name
             FROM grades g
             JOIN subjects s ON s.id = g.subject_id
-            JOIN users tea ON tea.id = g.teacher_id
+            JOIN users u ON u.id = g.teacher_id
             JOIN users stu ON stu.id = g.student_id
-            WHERE g.student_id IN ({placeholders})
-            ORDER BY g.id DESC
+            WHERE g.student_id IN ({placeholders}) ORDER BY g.id DESC
             """,
-            tuple(child_ids),
+            tuple(student_ids),
         )
         averages = query_all(
             f"""
-            SELECT stu.full_name AS student_name,
-                   s.name AS subject_name,
-                   ROUND(AVG(g.value), 2) AS average_value
-            FROM grades g
-            JOIN users stu ON stu.id = g.student_id
-            JOIN subjects s ON s.id = g.subject_id
+            SELECT stu.full_name AS student_name, s.name AS subject_name, ROUND(AVG(g.value), 2) AS average_value
+            FROM grades g JOIN users stu ON stu.id = g.student_id JOIN subjects s ON s.id = g.subject_id
             WHERE g.student_id IN ({placeholders})
-            GROUP BY stu.full_name, s.name
-            ORDER BY stu.full_name, s.name
+            GROUP BY stu.full_name, s.name ORDER BY stu.full_name, s.name
             """,
-            tuple(child_ids),
+            tuple(student_ids),
         )
-
+        show_student_col = True
     else:
-        show_student_col = True
         rows = query_all(
             """
-            SELECT g.id, g.value, g.comment, g.created_at,
-                   s.name AS subject_name,
-                   stu.full_name AS student_name,
-                   tea.full_name AS teacher_name
+            SELECT g.id, g.value, g.comment, g.created_at, s.name AS subject_name,
+                   stu.full_name AS student_name, tea.full_name AS teacher_name
             FROM grades g
             JOIN subjects s ON s.id = g.subject_id
             JOIN users stu ON stu.id = g.student_id
@@ -1014,81 +981,93 @@ def grades():
         )
         averages = query_all(
             """
-            SELECT stu.full_name AS student_name,
-                   s.name AS subject_name,
-                   ROUND(AVG(g.value), 2) AS average_value
-            FROM grades g
-            JOIN users stu ON stu.id = g.student_id
-            JOIN subjects s ON s.id = g.subject_id
-            GROUP BY stu.full_name, s.name
-            ORDER BY stu.full_name, s.name
+            SELECT stu.full_name AS student_name, s.name AS subject_name, ROUND(AVG(g.value), 2) AS average_value
+            FROM grades g JOIN users stu ON stu.id = g.student_id JOIN subjects s ON s.id = g.subject_id
+            GROUP BY stu.full_name, s.name ORDER BY stu.full_name, s.name
             """
         )
+        show_student_col = True
 
     content = """
     <div class='two-cols'>
       <div class='card'>
         <h1>Notes</h1>
         <table>
-          <thead>
-            <tr>
-              {% if show_student_col %}<th>Élève</th>{% endif %}
-              <th>Matière</th>
-              <th>Note</th>
-              <th>Professeur</th>
-              <th>Commentaire</th>
-              <th>Date</th>
-            </tr>
-          </thead>
+          <thead><tr>{% if show_student_col %}<th>Élève</th>{% endif %}<th>Matière</th><th>Note</th><th>Professeur</th><th>Commentaire</th><th>Date</th></tr></thead>
           <tbody>
             {% for row in rows %}
               <tr>
                 {% if show_student_col %}<td>{{ row.student_name }}</td>{% endif %}
-                <td>{{ row.subject_name }}</td>
-                <td><strong>{{ row.value }}/20</strong></td>
-                <td>{{ row.teacher_name }}</td>
-                <td>{{ row.comment or '-' }}</td>
-                <td>{{ row.created_at }}</td>
+                <td>{{ row.subject_name }}</td><td><strong>{{ row.value }}/20</strong></td><td>{{ row.teacher_name }}</td><td>{{ row.comment or '-' }}</td><td>{{ row.created_at }}</td>
               </tr>
-            {% else %}
-              <tr><td colspan="6">Aucune note.</td></tr>
-            {% endfor %}
+            {% else %}<tr><td colspan='6'>Aucune note.</td></tr>{% endfor %}
           </tbody>
         </table>
       </div>
-
       <div class='card'>
         <h2>Moyennes automatiques</h2>
         <table>
-          <thead>
-            <tr>
-              {% if show_student_col %}<th>Élève</th>{% endif %}
-              <th>Matière</th>
-              <th>Moyenne</th>
-            </tr>
-          </thead>
+          <thead><tr>{% if show_student_col %}<th>Élève</th>{% endif %}<th>Matière</th><th>Moyenne</th></tr></thead>
           <tbody>
             {% for avg in averages %}
-              <tr>
-                {% if show_student_col %}<td>{{ avg.student_name }}</td>{% endif %}
-                <td>{{ avg.subject_name }}</td>
-                <td><strong>{{ avg.average_value }}/20</strong></td>
-              </tr>
-            {% else %}
-              <tr><td colspan="3">Aucune moyenne disponible.</td></tr>
-            {% endfor %}
+              <tr>{% if show_student_col %}<td>{{ avg.student_name }}</td>{% endif %}<td>{{ avg.subject_name }}</td><td><strong>{{ avg.average_value }}/20</strong></td></tr>
+            {% else %}<tr><td colspan='3'>Aucune moyenne disponible.</td></tr>{% endfor %}
           </tbody>
         </table>
       </div>
     </div>
     """
-    return render_page(
-        content,
-        title="Notes",
-        rows=rows,
-        averages=averages,
-        show_student_col=show_student_col,
-    )
+    return render_page(content, title="Notes", rows=rows, averages=averages, show_student_col=show_student_col)
+
+
+@app.route("/add-grade", methods=["GET", "POST"])
+@login_required
+@role_required("prof", "admin")
+def add_grade():
+    students = query_all("SELECT u.id, u.full_name, c.name AS class_name FROM users u LEFT JOIN classes c ON c.id=u.class_id WHERE role='eleve' ORDER BY u.full_name")
+    subjects = query_all("SELECT id, name FROM subjects ORDER BY name")
+
+    if request.method == "POST":
+        try:
+            value_float = float(request.form.get("value"))
+            if value_float < 0 or value_float > 20:
+                raise ValueError
+        except Exception:
+            flash("La note doit être un nombre entre 0 et 20.")
+            return redirect(url_for("add_grade"))
+
+        execute_db(
+            "INSERT INTO grades (student_id, subject_id, teacher_id, value, comment, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                request.form.get("student_id"),
+                request.form.get("subject_id"),
+                g.user["id"],
+                value_float,
+                request.form.get("comment", "").strip(),
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            ),
+        )
+        flash("Note ajoutée.")
+        return redirect(url_for("grades"))
+
+    content = """
+    <div class='card' style='max-width:760px; margin:auto;'>
+      <h1>Ajouter une note</h1>
+      <form method='post'>
+        <label>Élève</label>
+        <select name='student_id' required>{% for s in students %}<option value='{{ s.id }}'>{{ s.full_name }}{% if s.class_name %} - {{ s.class_name }}{% endif %}</option>{% endfor %}</select>
+        <label>Matière</label>
+        <select name='subject_id' required>{% for s in subjects %}<option value='{{ s.id }}'>{{ s.name }}</option>{% endfor %}</select>
+        <label>Note sur 20</label>
+        <input name='value' type='number' step='0.1' min='0' max='20' required>
+        <label>Commentaire</label>
+        <textarea name='comment'></textarea>
+        <button type='submit'>Enregistrer</button>
+      </form>
+    </div>
+    """
+    return render_page(content, title="Ajouter note", students=students, subjects=subjects)
+
 
 # =========================
 # Devoirs
@@ -1665,5 +1644,3 @@ with app.app_context():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-
-
