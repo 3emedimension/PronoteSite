@@ -32,8 +32,9 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 USE_POSTGRES = bool(DATABASE_URL and psycopg2)
-DB_NAME = "mini_pronote_v7.db"
+DB_NAME = "mini_pronote_v8.db"
 ADMIN_DEFAULT_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Azsqerfd2012")
+SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "MonSuperMotDePasse123")
 
 UPLOAD_FOLDER = "uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -393,6 +394,10 @@ def init_db():
 # =========================
 @app.before_request
 def load_logged_user():
+    allowed_routes = {"site_access", "static"}
+    if request.endpoint not in allowed_routes and not session.get("site_unlocked"):
+        return redirect(url_for("site_access"))
+
     g.user = None
     user_id = session.get("user_id")
     if not user_id:
@@ -409,7 +414,10 @@ def load_logged_user():
     )
 
     if not user:
-        session.clear()
+        session.pop("user_id", None)
+        session.pop("username", None)
+        session.pop("role", None)
+        session.pop("full_name", None)
         return
 
     session["username"] = user["username"]
@@ -614,15 +622,52 @@ def render_page(content, **context):
 
 
 # =========================
+# Accès protégé au site
+# =========================
+@app.route("/site-access", methods=["GET", "POST"])
+def site_access():
+    if session.get("site_unlocked"):
+        return redirect(url_for("dashboard")) if session.get("user_id") else redirect(url_for("login"))
+
+    if request.method == "POST":
+        password = request.form.get("password", "").strip()
+
+        if password == SITE_PASSWORD:
+            session["site_unlocked"] = True
+            flash("Accès autorisé.")
+            return redirect(url_for("login"))
+
+        flash("Mot de passe du site incorrect.")
+
+    content = """
+    <div class='card' style='max-width:520px; margin:60px auto;'>
+      <h1>Accès protégé</h1>
+      <p class='muted'>Ce site est privé. Entre le mot de passe d'accès.</p>
+      <form method='post'>
+        <label>Mot de passe du site</label>
+        <input type='password' name='password' required>
+        <button type='submit'>Entrer</button>
+      </form>
+    </div>
+    """
+    return render_page(content, title="Accès protégé")
+
+
+# =========================
 # Auth
 # =========================
 @app.route("/")
 def index():
+    if not session.get("site_unlocked"):
+        return redirect(url_for("site_access"))
     return redirect(url_for("dashboard")) if session.get("user_id") else redirect(url_for("login"))
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    if not session.get("site_unlocked"):
+        return redirect(url_for("site_access"))
+
     if g.user:
         return redirect(url_for("dashboard"))
 
@@ -632,7 +677,10 @@ def login():
         user = query_one("SELECT * FROM users WHERE username = ?", (username,))
 
         if user and check_password_hash(user["password"], password):
+            site_unlocked = session.get("site_unlocked")
             session.clear()
+            if site_unlocked:
+                session["site_unlocked"] = True
             session["user_id"] = user["id"]
             session["username"] = user["username"]
             session["role"] = user["role"]
@@ -672,6 +720,9 @@ def login():
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
+    if not session.get("site_unlocked"):
+        return redirect(url_for("site_access"))
+
     classes = query_all("SELECT id, name FROM classes ORDER BY name")
     students = query_all("SELECT id, full_name FROM users WHERE role='eleve' ORDER BY full_name")
 
@@ -762,7 +813,10 @@ def register():
 
 @app.route("/logout")
 def logout():
+    site_unlocked = session.get("site_unlocked")
     session.clear()
+    if site_unlocked:
+        session["site_unlocked"] = True
     flash("Tu es déconnecté.")
     return redirect(url_for("login"))
 
