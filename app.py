@@ -32,7 +32,7 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 USE_POSTGRES = bool(DATABASE_URL and psycopg2)
-DB_NAME = "mini_pronote_v8.db"
+DB_NAME = "mini_pronote_v9.db"
 ADMIN_DEFAULT_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Azsqerfd2012")
 SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "EcoleR2026")
 
@@ -44,6 +44,8 @@ ALLOWED_EXTENSIONS = {
     "doc", "docx", "txt", "zip", "rar", "ppt", "pptx",
     "xls", "xlsx"
 }
+
+PROFILE_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
 
 
 # =========================
@@ -141,8 +143,32 @@ def table_has_column(table_name, column_name):
         conn.close()
 
 
+def table_exists(table_name):
+    if USE_POSTGRES:
+        row = query_one(
+            """
+            SELECT 1 AS ok
+            FROM information_schema.tables
+            WHERE table_name = ?
+            LIMIT 1
+            """,
+            (table_name,),
+        )
+        return bool(row)
+
+    row = query_one(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+        (table_name,),
+    )
+    return bool(row)
+
+
 def allowed_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
+
+
+def allowed_profile_image(filename: str) -> bool:
+    return "." in filename and filename.rsplit(".", 1)[1].lower() in PROFILE_IMAGE_EXTENSIONS
 
 
 def unique_filename(filename: str) -> str:
@@ -174,7 +200,8 @@ def init_db():
                     full_name TEXT NOT NULL,
                     class_id INTEGER REFERENCES classes(id),
                     child_id INTEGER REFERENCES users(id),
-                    child_id_2 INTEGER REFERENCES users(id)
+                    child_id_2 INTEGER REFERENCES users(id),
+                    profile_picture TEXT
                 )
             """)
 
@@ -246,6 +273,16 @@ def init_db():
                     created_at TEXT NOT NULL
                 )
             """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS general_info (
+                    id SERIAL PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    author_id INTEGER NOT NULL REFERENCES users(id),
+                    created_at TEXT NOT NULL
+                )
+            """)
         else:
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS classes (
@@ -264,6 +301,7 @@ def init_db():
                     class_id INTEGER,
                     child_id INTEGER,
                     child_id_2 INTEGER,
+                    profile_picture TEXT,
                     FOREIGN KEY(class_id) REFERENCES classes(id),
                     FOREIGN KEY(child_id) REFERENCES users(id),
                     FOREIGN KEY(child_id_2) REFERENCES users(id)
@@ -352,6 +390,17 @@ def init_db():
                 )
             """)
 
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS general_info (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    author_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(author_id) REFERENCES users(id)
+                )
+            """)
+
         conn.commit()
     finally:
         conn.close()
@@ -360,8 +409,33 @@ def init_db():
         execute_db("ALTER TABLE users ADD COLUMN child_id INTEGER")
     if not table_has_column("users", "child_id_2"):
         execute_db("ALTER TABLE users ADD COLUMN child_id_2 INTEGER")
+    if not table_has_column("users", "profile_picture"):
+        execute_db("ALTER TABLE users ADD COLUMN profile_picture TEXT")
     if not table_has_column("homework", "attachment"):
         execute_db("ALTER TABLE homework ADD COLUMN attachment TEXT")
+
+    if not table_exists("general_info"):
+        if USE_POSTGRES:
+            execute_db("""
+                CREATE TABLE IF NOT EXISTS general_info (
+                    id SERIAL PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    author_id INTEGER NOT NULL REFERENCES users(id),
+                    created_at TEXT NOT NULL
+                )
+            """)
+        else:
+            execute_db("""
+                CREATE TABLE IF NOT EXISTS general_info (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    author_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(author_id) REFERENCES users(id)
+                )
+            """)
 
     if query_one("SELECT COUNT(*) AS total FROM classes")["total"] == 0:
         executemany_db(
@@ -379,7 +453,7 @@ def init_db():
     admin_hash = generate_password_hash(ADMIN_DEFAULT_PASSWORD)
     if not admin_user:
         execute_db(
-            "INSERT INTO users (username, password, role, full_name, class_id, child_id, child_id_2) VALUES (?, ?, ?, ?, NULL, NULL, NULL)",
+            "INSERT INTO users (username, password, role, full_name, class_id, child_id, child_id_2, profile_picture) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL)",
             ("admin", admin_hash, "admin", "Administrateur"),
         )
     else:
@@ -543,28 +617,91 @@ BASE_TOP = """
     .hero p { opacity: 0.96; }
     h1, h2, h3 { margin-top: 0; }
     input, select, textarea {
-      width: 100%; padding: 12px 13px; border: 1px solid #d5e0f3; border-radius: 13px;
-      margin-top: 6px; margin-bottom: 14px; font-size: 15px; background: #fff; outline: none;
+      width: 100%;
+      padding: 12px 13px;
+      border: 1px solid #d5e0f3;
+      border-radius: 13px;
+      margin-top: 6px;
+      margin-bottom: 14px;
+      font-size: 15px;
+      background: #fff;
+      outline: none;
     }
-    input:focus, select:focus, textarea:focus { border-color: #60a5fa; box-shadow: 0 0 0 4px rgba(96,165,250,0.16); }
+    input:focus, select:focus, textarea:focus {
+      border-color: #60a5fa;
+      box-shadow: 0 0 0 4px rgba(96,165,250,0.16);
+    }
     textarea { min-height: 110px; resize: vertical; }
     button {
-      background: linear-gradient(90deg, #1d4ed8, #2563eb); color: white; border: none;
-      padding: 11px 16px; border-radius: 12px; font-weight: 700; cursor: pointer;
+      background: linear-gradient(90deg, #1d4ed8, #2563eb);
+      color: white;
+      border: none;
+      padding: 11px 16px;
+      border-radius: 12px;
+      font-weight: 700;
+      cursor: pointer;
       box-shadow: 0 10px 20px rgba(37,99,235,0.18);
     }
     button:hover { transform: translateY(-1px); }
     .danger { background: linear-gradient(90deg, #c0392b, #e74c3c); }
     .muted { color: #5f6b7a; }
-    .flash { background: #fff9db; border: 1px solid #f2dd7d; padding: 11px 13px; border-radius: 12px; margin-bottom: 16px; }
-    table { width: 100%; border-collapse: collapse; overflow: hidden; border-radius: 16px; background: white; }
-    th, td { padding: 12px 10px; border-bottom: 1px solid #ebf0f8; text-align: left; vertical-align: top; }
+    .flash {
+      background: #fff9db;
+      border: 1px solid #f2dd7d;
+      padding: 11px 13px;
+      border-radius: 12px;
+      margin-bottom: 16px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 16px;
+      background: white;
+    }
+    th, td {
+      padding: 12px 10px;
+      border-bottom: 1px solid #ebf0f8;
+      text-align: left;
+      vertical-align: top;
+    }
     th { background: #edf4ff; }
-    .badge { display: inline-block; padding: 6px 10px; border-radius: 999px; background: #e7efff; color: #1d4ed8; font-weight: 700; font-size: 13px; }
+    .badge {
+      display: inline-block;
+      padding: 6px 10px;
+      border-radius: 999px;
+      background: #e7efff;
+      color: #1d4ed8;
+      font-weight: 700;
+      font-size: 13px;
+    }
     .small { font-size: 13px; }
     .metric { font-size: 34px; font-weight: 800; margin: 0; }
     .two-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
     .login-wrap { max-width: 980px; margin: 40px auto; }
+    .avatar {
+      width: 68px;
+      height: 68px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 3px solid rgba(255,255,255,0.7);
+      background: #dbeafe;
+    }
+    .avatar-large {
+      width: 110px;
+      height: 110px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 4px solid rgba(255,255,255,0.8);
+      background: #dbeafe;
+    }
+    .info-box {
+      border: 1px solid #e5ebf5;
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 14px;
+      background: #fff;
+    }
     @media (max-width: 900px) { .two-cols { grid-template-columns: 1fr; } }
   </style>
 </head>
@@ -582,11 +719,13 @@ NAV = """
   <div>
     {% if session.get('user_id') %}
       <a href='{{ url_for("dashboard") }}'>Accueil</a>
+      <a href='{{ url_for("general_info_page") }}'>Info général</a>
       <a href='{{ url_for("grades") }}'>Notes</a>
       <a href='{{ url_for("homework_page") }}'>Devoirs</a>
       <a href='{{ url_for("schedule_page") }}'>Emploi du temps</a>
       <a href='{{ url_for("absences_page") }}'>Absences</a>
       <a href='{{ url_for("messages_page") }}'>Messagerie</a>
+      <a href='{{ url_for("profile_page") }}'>Profil</a>
       {% if session.get('role') in ['prof', 'admin'] %}
         <a href='{{ url_for("add_grade") }}'>Ajouter note</a>
         <a href='{{ url_for("manage_users") }}'>Comptes</a>
@@ -707,10 +846,10 @@ def login():
         </div>
         <div class='card'>
           <h2>Fonctions</h2>
-          <p><span class='badge'>Classes</span> gestion des classes et matières</p>
+          <p><span class='badge'>Infos</span> informations générales sur l'accueil</p>
           <p><span class='badge'>Notes</span> moyennes automatiques par matière</p>
           <p><span class='badge'>Vie scolaire</span> devoirs, emploi du temps, absences</p>
-          <p><span class='badge'>Messagerie</span> échanges prof ↔ élève ↔ parent</p>
+          <p><span class='badge'>Profil</span> photo de profil personnelle</p>
         </div>
       </div>
     </div>
@@ -753,7 +892,7 @@ def register():
 
         try:
             execute_db(
-                "INSERT INTO users (username, password, role, full_name, class_id, child_id, child_id_2) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO users (username, password, role, full_name, class_id, child_id, child_id_2, profile_picture) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
                 (username, generate_password_hash(password), role, full_name, class_id, child_id, child_id_2),
             )
             flash("Compte créé. Tu peux maintenant te connecter.")
@@ -822,6 +961,173 @@ def logout():
 
 
 # =========================
+# Profil
+# =========================
+@app.route("/profile", methods=["GET", "POST"])
+@login_required
+def profile_page():
+    user = g.user
+
+    if request.method == "POST":
+        uploaded = request.files.get("profile_picture")
+
+        if not uploaded or not uploaded.filename:
+            flash("Choisis une image.")
+            return redirect(url_for("profile_page"))
+
+        if not allowed_profile_image(uploaded.filename):
+            flash("Format image non autorisé.")
+            return redirect(url_for("profile_page"))
+
+        new_filename = unique_filename(uploaded.filename)
+        uploaded.save(os.path.join(UPLOAD_FOLDER, new_filename))
+
+        execute_db(
+            "UPDATE users SET profile_picture = ? WHERE id = ?",
+            (new_filename, user["id"]),
+        )
+        session["full_name"] = user["full_name"]
+        flash("Photo de profil mise à jour.")
+        return redirect(url_for("profile_page"))
+
+    refreshed_user = query_one(
+        """
+        SELECT u.*, c.name AS class_name
+        FROM users u
+        LEFT JOIN classes c ON c.id = u.class_id
+        WHERE u.id = ?
+        """,
+        (user["id"],),
+    )
+
+    content = """
+    <div class='grid'>
+      <div class='card' style='text-align:center;'>
+        {% if user.profile_picture %}
+          <img src='{{ url_for("uploaded_file", filename=user.profile_picture) }}' class='avatar-large' alt='Photo de profil'>
+        {% else %}
+          <div class='avatar-large' style='display:inline-flex; align-items:center; justify-content:center; color:#1d4ed8; font-size:34px; font-weight:800;'>
+            {{ user.full_name[:1] }}
+          </div>
+        {% endif %}
+        <h1 style='margin-top:16px;'>{{ user.full_name }}</h1>
+        <p class='muted'>@{{ user.username }} · {{ user.role }}{% if user.class_name %} · {{ user.class_name }}{% endif %}</p>
+      </div>
+
+      <div class='card'>
+        <h2>Changer la photo de profil</h2>
+        <form method='post' enctype='multipart/form-data'>
+          <label>Choisir une image</label>
+          <input type='file' name='profile_picture' accept='image/*' required>
+          <button type='submit'>Mettre à jour</button>
+        </form>
+        <p class='muted small'>Formats autorisés : png, jpg, jpeg, gif, webp</p>
+      </div>
+    </div>
+    """
+    return render_page(content, title="Profil", user=refreshed_user)
+
+
+# =========================
+# Infos générales
+# =========================
+@app.route("/general-info", methods=["GET", "POST"])
+@login_required
+def general_info_page():
+    user = g.user
+
+    if request.method == "POST":
+        form_type = request.form.get("form_type", "").strip()
+
+        if form_type == "create":
+            if user["role"] not in ["prof", "admin"]:
+                flash("Accès refusé.")
+                return redirect(url_for("general_info_page"))
+
+            title = request.form.get("title", "").strip()
+            body = request.form.get("body", "").strip()
+
+            if not title or not body:
+                flash("Remplis le titre et le contenu.")
+                return redirect(url_for("general_info_page"))
+
+            execute_db(
+                "INSERT INTO general_info (title, body, author_id, created_at) VALUES (?, ?, ?, ?)",
+                (title, body, user["id"], datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            )
+            flash("Information générale publiée.")
+            return redirect(url_for("general_info_page"))
+
+        elif form_type == "delete":
+            info_id = request.form.get("info_id")
+            info = query_one("SELECT * FROM general_info WHERE id = ?", (info_id,))
+
+            if not info:
+                flash("Information introuvable.")
+                return redirect(url_for("general_info_page"))
+
+            if user["role"] != "admin" and str(info["author_id"]) != str(user["id"]):
+                flash("Tu ne peux pas supprimer cette information.")
+                return redirect(url_for("general_info_page"))
+
+            execute_db("DELETE FROM general_info WHERE id = ?", (info_id,))
+            flash("Information supprimée.")
+            return redirect(url_for("general_info_page"))
+
+    infos = query_all(
+        """
+        SELECT gi.*, u.full_name AS author_name
+        FROM general_info gi
+        JOIN users u ON u.id = gi.author_id
+        ORDER BY gi.id DESC
+        """
+    )
+
+    content = """
+    <div class='grid'>
+      {% if user.role in ['prof', 'admin'] %}
+      <div class='card'>
+        <h2>Publier une information</h2>
+        <form method='post'>
+          <input type='hidden' name='form_type' value='create'>
+          <label>Titre</label>
+          <input name='title' required>
+          <label>Contenu</label>
+          <textarea name='body' required></textarea>
+          <button type='submit'>Publier</button>
+        </form>
+      </div>
+      {% endif %}
+
+      <div class='card'>
+        <h1>Info général</h1>
+        {% for info in infos %}
+          <div class='info-box'>
+            <div style='display:flex; justify-content:space-between; gap:12px; align-items:flex-start; flex-wrap:wrap;'>
+              <div>
+                <strong>{{ info.title }}</strong>
+                <p style='margin:10px 0;'>{{ info.body }}</p>
+                <p class='muted small'>Par {{ info.author_name }} · {{ info.created_at }}</p>
+              </div>
+              {% if user.role == 'admin' or info.author_id == user.id %}
+                <form method='post' onsubmit="return confirm('Supprimer cette information ?');" style='margin:0;'>
+                  <input type='hidden' name='form_type' value='delete'>
+                  <input type='hidden' name='info_id' value='{{ info.id }}'>
+                  <button type='submit' class='danger'>Supprimer</button>
+                </form>
+              {% endif %}
+            </div>
+          </div>
+        {% else %}
+          <p class='muted'>Aucune information générale pour le moment.</p>
+        {% endfor %}
+      </div>
+    </div>
+    """
+    return render_page(content, title="Info général", user=user, infos=infos)
+
+
+# =========================
 # Dashboard
 # =========================
 @app.route("/dashboard")
@@ -881,36 +1187,91 @@ def dashboard():
         (user["id"],),
     )
 
+    general_infos = query_all(
+        """
+        SELECT gi.*, u.full_name AS author_name
+        FROM general_info gi
+        JOIN users u ON u.id = gi.author_id
+        ORDER BY gi.id DESC
+        LIMIT 5
+        """
+    )
+
     content = """
     <div class='hero'>
-      <h1>Bienvenue {{ user.full_name }}</h1>
-      <p>
-        Rôle : <strong>{{ user.role }}</strong>
-        {% if parent_child_names %} · Enfant(s) lié(s) : <strong>{{ parent_child_names }}</strong>
-        {% elif user.class_name %} · Classe : <strong>{{ user.class_name }}</strong>{% endif %}
-      </p>
+      <div style='display:flex; align-items:center; gap:18px; flex-wrap:wrap;'>
+        {% if user.profile_picture %}
+          <img src='{{ url_for("uploaded_file", filename=user.profile_picture) }}' class='avatar' alt='Photo de profil'>
+        {% else %}
+          <div class='avatar' style='display:flex; align-items:center; justify-content:center; color:#1d4ed8; font-size:24px; font-weight:800;'>
+            {{ user.full_name[:1] }}
+          </div>
+        {% endif %}
+        <div>
+          <h1 style='margin-bottom:8px;'>Bienvenue {{ user.full_name }}</h1>
+          <p>
+            Rôle : <strong>{{ user.role }}</strong>
+            {% if parent_child_names %} · Enfant(s) lié(s) : <strong>{{ parent_child_names }}</strong>
+            {% elif user.class_name %} · Classe : <strong>{{ user.class_name }}</strong>{% endif %}
+          </p>
+        </div>
+      </div>
     </div>
+
     <div class='grid'>
-      {% for key, value in stats.items() %}<div class='card'><h3>{{ key }}</h3><p class='metric'>{{ value }}</p></div>{% endfor %}
+      {% for key, value in stats.items() %}
+        <div class='card'><h3>{{ key }}</h3><p class='metric'>{{ value }}</p></div>
+      {% endfor %}
     </div>
+
     <div class='grid' style='margin-top:18px;'>
       <div class='card'>
         <h2>Accès rapide</h2>
+        <p><a href='{{ url_for("general_info_page") }}'>Voir les infos générales</a></p>
         <p><a href='{{ url_for("grades") }}'>Voir les notes</a></p>
         <p><a href='{{ url_for("homework_page") }}'>Voir les devoirs</a></p>
         <p><a href='{{ url_for("schedule_page") }}'>Voir l'emploi du temps</a></p>
         <p><a href='{{ url_for("absences_page") }}'>Voir les absences</a></p>
         <p><a href='{{ url_for("messages_page") }}'>Ouvrir la messagerie</a></p>
+        <p><a href='{{ url_for("profile_page") }}'>Mon profil</a></p>
       </div>
+
       <div class='card'>
         <h2>Derniers messages</h2>
         {% for m in latest_messages %}
-          <div style='padding:10px 0; border-bottom:1px solid #eef3fb;'><strong>{{ m.subject }}</strong><br><span class='small muted'>De {{ m.sender_name }} · {{ m.created_at }}</span></div>
-        {% else %}<p class='muted'>Aucun message reçu.</p>{% endfor %}
+          <div style='padding:10px 0; border-bottom:1px solid #eef3fb;'>
+            <strong>{{ m.subject }}</strong><br>
+            <span class='small muted'>De {{ m.sender_name }} · {{ m.created_at }}</span>
+          </div>
+        {% else %}
+          <p class='muted'>Aucun message reçu.</p>
+        {% endfor %}
       </div>
     </div>
+
+    <div class='card' style='margin-top:18px;'>
+      <h2>Infos générales récentes</h2>
+      {% for info in general_infos %}
+        <div class='info-box'>
+          <strong>{{ info.title }}</strong>
+          <p style='margin:10px 0;'>{{ info.body }}</p>
+          <p class='muted small'>Par {{ info.author_name }} · {{ info.created_at }}</p>
+        </div>
+      {% else %}
+        <p class='muted'>Aucune information générale pour le moment.</p>
+      {% endfor %}
+      <p><a href='{{ url_for("general_info_page") }}'>Voir toutes les infos</a></p>
+    </div>
     """
-    return render_page(content, title="Tableau de bord", user=user, stats=stats, latest_messages=latest_messages, parent_child_names=parent_child_names)
+    return render_page(
+        content,
+        title="Tableau de bord",
+        user=user,
+        stats=stats,
+        latest_messages=latest_messages,
+        parent_child_names=parent_child_names,
+        general_infos=general_infos,
+    )
 
 
 # =========================
@@ -1538,7 +1899,7 @@ def manage_users():
 
             try:
                 execute_db(
-                    "INSERT INTO users (username, password, role, full_name, class_id, child_id, child_id_2) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO users (username, password, role, full_name, class_id, child_id, child_id_2, profile_picture) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
                     (username, generate_password_hash(password), role, full_name, class_id, child_id, child_id_2),
                 )
                 flash("Utilisateur ajouté.")
@@ -1610,7 +1971,7 @@ def manage_users():
 
     users = query_all(
         """
-        SELECT u.id, u.username, u.full_name, u.role, c.name AS class_name,
+        SELECT u.id, u.username, u.full_name, u.role, u.profile_picture, c.name AS class_name,
                child.full_name AS child_name, child2.full_name AS child_name_2
         FROM users u
         LEFT JOIN classes c ON c.id = u.class_id
@@ -1668,6 +2029,7 @@ def manage_users():
           <thead>
             <tr>
               <th>ID</th>
+              <th>Photo</th>
               <th>Nom</th>
               <th>Utilisateur</th>
               <th>Rôle</th>
@@ -1681,6 +2043,15 @@ def manage_users():
             {% for u in users %}
             <tr>
               <td>{{ u.id }}</td>
+              <td>
+                {% if u.profile_picture %}
+                  <img src='{{ url_for("uploaded_file", filename=u.profile_picture) }}' class='avatar' alt='Photo'>
+                {% else %}
+                  <div class='avatar' style='display:flex; align-items:center; justify-content:center; color:#1d4ed8; font-size:18px; font-weight:800;'>
+                    {{ u.full_name[:1] }}
+                  </div>
+                {% endif %}
+              </td>
               <td>{{ u.full_name }}</td>
               <td>{{ u.username }}</td>
               <td>{{ u.role }}</td>
@@ -1740,7 +2111,8 @@ def manage_users():
     </script>
     """
     return render_page(content, title="Comptes", users=users, user=user, classes=classes, students=students)
-    
+
+
 # =========================
 # École
 # =========================
@@ -1829,4 +2201,3 @@ with app.app_context():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False)
-
