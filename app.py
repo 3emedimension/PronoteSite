@@ -32,7 +32,7 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 USE_POSTGRES = bool(DATABASE_URL and psycopg2)
-DB_NAME = "mini_pronote_v9.db"
+DB_NAME = "mini_pronote_v10.db"
 ADMIN_DEFAULT_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Azsqerfd2012")
 SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "EcoleR2026")
 
@@ -44,7 +44,6 @@ ALLOWED_EXTENSIONS = {
     "doc", "docx", "txt", "zip", "rar", "ppt", "pptx",
     "xls", "xlsx"
 }
-
 PROFILE_IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "gif", "webp"}
 
 
@@ -569,35 +568,135 @@ BASE_TOP = """
         linear-gradient(135deg, #eff6ff, #f8fbff 55%, #eef4ff);
       color: #18212f;
     }
+
     .nav {
       background: linear-gradient(90deg, #0f172a, #1d4ed8);
       color: white;
-      padding: 15px 22px;
+      padding: 14px 18px;
       display: flex;
       justify-content: space-between;
       align-items: center;
       gap: 12px;
-      flex-wrap: wrap;
       box-shadow: 0 12px 28px rgba(15, 23, 42, 0.22);
       position: sticky;
       top: 0;
-      z-index: 20;
+      z-index: 50;
+    }
+    .brand-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
     }
     .nav strong { font-size: 20px; }
+    .nav-user {
+      font-size: 14px;
+      opacity: 0.95;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 280px;
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
     .nav a {
       color: white;
       text-decoration: none;
-      margin-left: 14px;
       font-weight: 700;
       opacity: 0.95;
     }
     .nav a:hover { opacity: 1; text-decoration: underline; }
+
+    .burger {
+      display: none;
+      width: 44px;
+      height: 44px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.25);
+      background: rgba(255,255,255,0.08);
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      padding: 0;
+    }
+    .burger-lines {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .burger-lines span {
+      display: block;
+      width: 22px;
+      height: 2.5px;
+      background: white;
+      border-radius: 10px;
+    }
+
+    .mobile-menu {
+      display: none;
+      position: fixed;
+      top: 0;
+      right: -320px;
+      width: 280px;
+      max-width: 85vw;
+      height: 100vh;
+      background: linear-gradient(180deg, #0f172a, #1e3a8a);
+      padding: 22px 16px;
+      box-shadow: -10px 0 28px rgba(15, 23, 42, 0.3);
+      z-index: 80;
+      transition: right 0.25s ease;
+      overflow-y: auto;
+    }
+    .mobile-menu.open { right: 0; }
+    .mobile-menu a {
+      display: block;
+      color: white;
+      text-decoration: none;
+      padding: 12px 10px;
+      border-radius: 12px;
+      font-weight: 700;
+      margin-bottom: 8px;
+      background: rgba(255,255,255,0.06);
+    }
+    .mobile-menu a:hover {
+      background: rgba(255,255,255,0.12);
+    }
+    .mobile-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+      color: white;
+    }
+    .close-menu {
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.25);
+      box-shadow: none;
+      padding: 8px 12px;
+    }
+    .mobile-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.45);
+      z-index: 70;
+    }
+    .mobile-overlay.show { display: block; }
+
     .container {
       max-width: 1260px;
       margin: 28px auto;
       padding: 0 18px;
     }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 18px;
+    }
     .card {
       background: rgba(255,255,255,0.93);
       backdrop-filter: blur(10px);
@@ -605,6 +704,7 @@ BASE_TOP = """
       padding: 24px;
       box-shadow: 0 18px 36px rgba(37,99,235,0.10);
       border: 1px solid rgba(255,255,255,0.85);
+      overflow-x: auto;
     }
     .hero {
       background: linear-gradient(135deg, #1d4ed8, #60a5fa);
@@ -616,6 +716,7 @@ BASE_TOP = """
     }
     .hero p { opacity: 0.96; }
     h1, h2, h3 { margin-top: 0; }
+
     input, select, textarea {
       width: 100%;
       padding: 12px 13px;
@@ -632,6 +733,7 @@ BASE_TOP = """
       box-shadow: 0 0 0 4px rgba(96,165,250,0.16);
     }
     textarea { min-height: 110px; resize: vertical; }
+
     button {
       background: linear-gradient(90deg, #1d4ed8, #2563eb);
       color: white;
@@ -643,6 +745,7 @@ BASE_TOP = """
       box-shadow: 0 10px 20px rgba(37,99,235,0.18);
     }
     button:hover { transform: translateY(-1px); }
+
     .danger { background: linear-gradient(90deg, #c0392b, #e74c3c); }
     .muted { color: #5f6b7a; }
     .flash {
@@ -652,12 +755,14 @@ BASE_TOP = """
       border-radius: 12px;
       margin-bottom: 16px;
     }
+
     table {
       width: 100%;
       border-collapse: collapse;
       overflow: hidden;
       border-radius: 16px;
       background: white;
+      min-width: 640px;
     }
     th, td {
       padding: 12px 10px;
@@ -666,6 +771,7 @@ BASE_TOP = """
       vertical-align: top;
     }
     th { background: #edf4ff; }
+
     .badge {
       display: inline-block;
       padding: 6px 10px;
@@ -679,6 +785,7 @@ BASE_TOP = """
     .metric { font-size: 34px; font-weight: 800; margin: 0; }
     .two-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
     .login-wrap { max-width: 980px; margin: 40px auto; }
+
     .avatar {
       width: 68px;
       height: 68px;
@@ -686,6 +793,7 @@ BASE_TOP = """
       object-fit: cover;
       border: 3px solid rgba(255,255,255,0.7);
       background: #dbeafe;
+      flex-shrink: 0;
     }
     .avatar-large {
       width: 110px;
@@ -702,7 +810,19 @@ BASE_TOP = """
       margin-bottom: 14px;
       background: #fff;
     }
-    @media (max-width: 900px) { .two-cols { grid-template-columns: 1fr; } }
+
+    @media (max-width: 900px) {
+      .two-cols { grid-template-columns: 1fr; }
+      .nav-links { display: none; }
+      .burger { display: inline-flex; }
+      .mobile-menu { display: block; }
+      .nav-user { max-width: 150px; }
+      .container { padding: 0 12px; margin: 18px auto; }
+      .card { padding: 18px; border-radius: 18px; }
+      .hero { padding: 20px; border-radius: 22px; }
+      .metric { font-size: 28px; }
+      table { min-width: 560px; }
+    }
   </style>
 </head>
 <body>
@@ -710,35 +830,80 @@ BASE_TOP = """
 
 NAV = """
 <div class='nav'>
-  <div>
+  <div class='brand-wrap'>
     <strong>Mini Pronote+</strong>
     {% if session.get('user_id') %}
-      <span style='margin-left:10px;'>{{ session.get('full_name') }} ({{ session.get('role') }})</span>
+      <span class='nav-user'>{{ session.get('full_name') }} ({{ session.get('role') }})</span>
     {% endif %}
   </div>
-  <div>
-    {% if session.get('user_id') %}
-      <a href='{{ url_for("dashboard") }}'>Accueil</a>
-      <a href='{{ url_for("general_info_page") }}'>Info général</a>
-      <a href='{{ url_for("grades") }}'>Notes</a>
-      <a href='{{ url_for("homework_page") }}'>Devoirs</a>
-      <a href='{{ url_for("schedule_page") }}'>Emploi du temps</a>
-      <a href='{{ url_for("absences_page") }}'>Absences</a>
-      <a href='{{ url_for("messages_page") }}'>Messagerie</a>
-      <a href='{{ url_for("profile_page") }}'>Profil</a>
-      {% if session.get('role') in ['prof', 'admin'] %}
-        <a href='{{ url_for("add_grade") }}'>Ajouter note</a>
-        <a href='{{ url_for("manage_users") }}'>Comptes</a>
-      {% endif %}
-      {% if session.get('role') == 'admin' %}
-        <a href='{{ url_for("manage_school") }}'>École</a>
-      {% endif %}
-      <a href='{{ url_for("logout") }}'>Déconnexion</a>
-    {% else %}
-      <a href='{{ url_for("login") }}'>Connexion</a>
+
+  {% if session.get('user_id') %}
+  <div class='nav-links'>
+    <a href='{{ url_for("dashboard") }}'>Accueil</a>
+    <a href='{{ url_for("general_info_page") }}'>Info général</a>
+    <a href='{{ url_for("grades") }}'>Notes</a>
+    <a href='{{ url_for("homework_page") }}'>Devoirs</a>
+    <a href='{{ url_for("schedule_page") }}'>Emploi du temps</a>
+    <a href='{{ url_for("absences_page") }}'>Absences</a>
+    <a href='{{ url_for("messages_page") }}'>Messagerie</a>
+    <a href='{{ url_for("profile_page") }}'>Profil</a>
+    {% if session.get('role') in ['prof', 'admin'] %}
+      <a href='{{ url_for("add_grade") }}'>Ajouter note</a>
+      <a href='{{ url_for("manage_users") }}'>Comptes</a>
     {% endif %}
+    {% if session.get('role') == 'admin' %}
+      <a href='{{ url_for("manage_school") }}'>École</a>
+    {% endif %}
+    <a href='{{ url_for("logout") }}'>Déconnexion</a>
   </div>
+
+  <button class='burger' type='button' onclick='openMobileMenu()'>
+    <div class='burger-lines'>
+      <span></span><span></span><span></span>
+    </div>
+  </button>
+  {% else %}
+  <div class='nav-links'>
+    <a href='{{ url_for("login") }}'>Connexion</a>
+  </div>
+  {% endif %}
 </div>
+
+{% if session.get('user_id') %}
+<div id='mobileOverlay' class='mobile-overlay' onclick='closeMobileMenu()'></div>
+<div id='mobileMenu' class='mobile-menu'>
+  <div class='mobile-head'>
+    <strong>Menu</strong>
+    <button class='close-menu' type='button' onclick='closeMobileMenu()'>✕</button>
+  </div>
+  <a href='{{ url_for("dashboard") }}' onclick='closeMobileMenu()'>Accueil</a>
+  <a href='{{ url_for("general_info_page") }}' onclick='closeMobileMenu()'>Info général</a>
+  <a href='{{ url_for("grades") }}' onclick='closeMobileMenu()'>Notes</a>
+  <a href='{{ url_for("homework_page") }}' onclick='closeMobileMenu()'>Devoirs</a>
+  <a href='{{ url_for("schedule_page") }}' onclick='closeMobileMenu()'>Emploi du temps</a>
+  <a href='{{ url_for("absences_page") }}' onclick='closeMobileMenu()'>Absences</a>
+  <a href='{{ url_for("messages_page") }}' onclick='closeMobileMenu()'>Messagerie</a>
+  <a href='{{ url_for("profile_page") }}' onclick='closeMobileMenu()'>Profil</a>
+  {% if session.get('role') in ['prof', 'admin'] %}
+    <a href='{{ url_for("add_grade") }}' onclick='closeMobileMenu()'>Ajouter note</a>
+    <a href='{{ url_for("manage_users") }}' onclick='closeMobileMenu()'>Comptes</a>
+  {% endif %}
+  {% if session.get('role') == 'admin' %}
+    <a href='{{ url_for("manage_school") }}' onclick='closeMobileMenu()'>École</a>
+  {% endif %}
+  <a href='{{ url_for("logout") }}' onclick='closeMobileMenu()'>Déconnexion</a>
+</div>
+<script>
+function openMobileMenu() {
+  document.getElementById('mobileMenu').classList.add('open');
+  document.getElementById('mobileOverlay').classList.add('show');
+}
+function closeMobileMenu() {
+  document.getElementById('mobileMenu').classList.remove('open');
+  document.getElementById('mobileOverlay').classList.remove('show');
+}
+</script>
+{% endif %}
 """
 
 
@@ -834,7 +999,7 @@ def login():
       <div class='grid'>
         <div class='card'>
           <h1>Connexion</h1>
-          <p class='muted'>Version propre avec sessions stabilisées, mots de passe sécurisés et interface améliorée.</p>
+          <p class='muted'>Version complète avec menu mobile, profil, infos générales et messagerie élève ↔ élève.</p>
           <p class='muted'>Pas de compte ? <a href='{{ url_for("register") }}'>Créer un compte</a></p>
           <form method='post' autocomplete='off'>
             <label>Nom d'utilisateur</label>
@@ -986,7 +1151,6 @@ def profile_page():
             "UPDATE users SET profile_picture = ? WHERE id = ?",
             (new_filename, user["id"]),
         )
-        session["full_name"] = user["full_name"]
         flash("Photo de profil mise à jour.")
         return redirect(url_for("profile_page"))
 
@@ -1140,12 +1304,23 @@ def dashboard():
     if user["role"] == "eleve":
         grades_list = query_all("SELECT value FROM grades WHERE student_id = ?", (user["id"],))
         avg = round(sum(g["value"] for g in grades_list) / len(grades_list), 2) if grades_list else "-"
+        if user.get("class_id"):
+            homework_total = query_one(
+                "SELECT COUNT(*) AS total FROM homework WHERE class_id IS NULL OR class_id = ?",
+                (user["class_id"],),
+            )["total"]
+        else:
+            homework_total = query_one(
+                "SELECT COUNT(*) AS total FROM homework WHERE class_id IS NULL"
+            )["total"]
+
         stats = {
             "Moyenne générale": avg,
             "Notes": len(grades_list),
-            "Devoirs": query_one("SELECT COUNT(*) AS total FROM homework WHERE class_id IS NULL OR class_id = ?", (user["class_id"],))["total"],
+            "Devoirs": homework_total,
             "Absences": query_one("SELECT COUNT(*) AS total FROM absences WHERE student_id = ?", (user["id"],))["total"],
         }
+
     elif user["role"] == "parent":
         if parent_children:
             child_ids = [child["id"] for child in parent_children]
@@ -1162,6 +1337,7 @@ def dashboard():
             }
         else:
             stats = {"Enfants": 0, "Noms": "Non liés", "Moyenne générale": "-", "Notes": 0, "Absences": 0}
+
     elif user["role"] == "prof":
         stats = {
             "Notes saisies": query_one("SELECT COUNT(*) AS total FROM grades WHERE teacher_id = ?", (user["id"],))["total"],
@@ -1169,6 +1345,7 @@ def dashboard():
             "Messages reçus": query_one("SELECT COUNT(*) AS total FROM messages WHERE receiver_id = ?", (user["id"],))["total"],
             "Élèves": query_one("SELECT COUNT(*) AS total FROM users WHERE role='eleve'")["total"],
         }
+
     else:
         stats = {
             "Utilisateurs": query_one("SELECT COUNT(*) AS total FROM users")["total"],
@@ -1180,9 +1357,11 @@ def dashboard():
     latest_messages = query_all(
         """
         SELECT m.subject, m.created_at, u.full_name AS sender_name
-        FROM messages m JOIN users u ON u.id = m.sender_id
+        FROM messages m
+        JOIN users u ON u.id = m.sender_id
         WHERE m.receiver_id = ?
-        ORDER BY m.id DESC LIMIT 5
+        ORDER BY m.id DESC
+        LIMIT 5
         """,
         (user["id"],),
     )
@@ -1721,13 +1900,23 @@ def absences_page():
 
         execute_db(
             "INSERT INTO absences (student_id, teacher_id, absence_date, reason, status, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (request.form.get("student_id"), user["id"], request.form.get("absence_date"), request.form.get("reason", "").strip(), request.form.get("status"), datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+            (
+                request.form.get("student_id"),
+                user["id"],
+                request.form.get("absence_date"),
+                request.form.get("reason", "").strip(),
+                request.form.get("status"),
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            ),
         )
         flash("Absence enregistrée.")
         return redirect(url_for("absences_page"))
 
     if user["role"] == "eleve":
-        rows = query_all("SELECT a.*, u.full_name AS teacher_name FROM absences a JOIN users u ON u.id=a.teacher_id WHERE student_id=? ORDER BY absence_date DESC", (user["id"],))
+        rows = query_all(
+            "SELECT a.*, u.full_name AS teacher_name FROM absences a JOIN users u ON u.id=a.teacher_id WHERE student_id=? ORDER BY absence_date DESC",
+            (user["id"],)
+        )
     elif user["role"] == "parent":
         children = get_parent_children(user)
         if children:
@@ -1791,8 +1980,12 @@ def absences_page():
 def messages_page():
     user = g.user
 
+    # Corrigé : les élèves peuvent écrire à tous les autres utilisateurs, y compris aux autres élèves
     if user["role"] == "eleve":
-        contacts = query_all("SELECT id, full_name, role FROM users WHERE role IN ('prof', 'admin', 'parent') AND id != ? ORDER BY full_name", (user["id"],))
+        contacts = query_all(
+            "SELECT id, full_name, role FROM users WHERE id != ? ORDER BY full_name",
+            (user["id"],)
+        )
     elif user["role"] == "parent":
         children = get_parent_children(user)
         child_ids = [child["id"] for child in children]
@@ -1811,8 +2004,14 @@ def messages_page():
         receiver_id = request.form.get("receiver_id")
         subject = request.form.get("subject", "").strip()
         body = request.form.get("body", "").strip()
+
         if not receiver_id or not subject or not body:
             flash("Remplis tous les champs du message.")
+            return redirect(url_for("messages_page"))
+
+        target_user = query_one("SELECT id FROM users WHERE id = ?", (receiver_id,))
+        if not target_user:
+            flash("Destinataire introuvable.")
             return redirect(url_for("messages_page"))
 
         execute_db(
@@ -1836,16 +2035,30 @@ def messages_page():
       <div class='card'>
         <h2>Nouveau message</h2>
         <form method='post'>
-          <label>Destinataire</label><select name='receiver_id' required>{% for c in contacts %}<option value='{{ c.id }}'>{{ c.full_name }} ({{ c.role }})</option>{% endfor %}</select>
-          <label>Sujet</label><input name='subject' required>
-          <label>Message</label><textarea name='body' required></textarea>
+          <label>Destinataire</label>
+          <select name='receiver_id' required>
+            {% for c in contacts %}
+              <option value='{{ c.id }}'>{{ c.full_name }} ({{ c.role }})</option>
+            {% endfor %}
+          </select>
+          <label>Sujet</label>
+          <input name='subject' required>
+          <label>Message</label>
+          <textarea name='body' required></textarea>
           <button type='submit'>Envoyer</button>
         </form>
       </div>
       <div class='card'>
         <h1>Messagerie</h1>
-        {% for m in inbox %}<div style='border:1px solid #e6edf8; border-radius:16px; padding:14px; margin-bottom:12px;'><strong>{{ m.subject }}</strong><p style='margin:8px 0;'>{{ m.body }}</p><p class='muted small'>De {{ m.sender_name }} à {{ m.receiver_name }} · {{ m.created_at }}</p></div>
-        {% else %}<p>Aucun message.</p>{% endfor %}
+        {% for m in inbox %}
+          <div style='border:1px solid #e6edf8; border-radius:16px; padding:14px; margin-bottom:12px;'>
+            <strong>{{ m.subject }}</strong>
+            <p style='margin:8px 0;'>{{ m.body }}</p>
+            <p class='muted small'>De {{ m.sender_name }} à {{ m.receiver_name }} · {{ m.created_at }}</p>
+          </div>
+        {% else %}
+          <p>Aucun message.</p>
+        {% endfor %}
       </div>
     </div>
     """
@@ -2128,7 +2341,10 @@ def manage_school():
                 flash("Nom invalide.")
                 return redirect(url_for("manage_school"))
             try:
-                execute_db("INSERT INTO classes (name) VALUES (?)" if form_type == "class" else "INSERT INTO subjects (name) VALUES (?)", (name,))
+                execute_db(
+                    "INSERT INTO classes (name) VALUES (?)" if form_type == "class" else "INSERT INTO subjects (name) VALUES (?)",
+                    (name,),
+                )
                 flash("Classe ajoutée." if form_type == "class" else "Matière ajoutée.")
             except Exception:
                 flash("Ce nom existe déjà.")
@@ -2165,21 +2381,53 @@ def manage_school():
     <div class='grid'>
       <div class='card'>
         <h2>Ajouter une classe</h2>
-        <form method='post'><input type='hidden' name='form_type' value='class'><label>Nom de la classe</label><input name='name' placeholder='6A' required><button type='submit'>Ajouter la classe</button></form>
+        <form method='post'>
+          <input type='hidden' name='form_type' value='class'>
+          <label>Nom de la classe</label>
+          <input name='name' placeholder='6A' required>
+          <button type='submit'>Ajouter la classe</button>
+        </form>
       </div>
       <div class='card'>
         <h2>Ajouter une matière</h2>
-        <form method='post'><input type='hidden' name='form_type' value='subject'><label>Nom de la matière</label><input name='name' placeholder='Physique' required><button type='submit'>Ajouter la matière</button></form>
+        <form method='post'>
+          <input type='hidden' name='form_type' value='subject'>
+          <label>Nom de la matière</label>
+          <input name='name' placeholder='Physique' required>
+          <button type='submit'>Ajouter la matière</button>
+        </form>
       </div>
     </div>
     <div class='grid' style='margin-top:18px;'>
       <div class='card'>
         <h2>Classes</h2>
-        {% for c in classes %}<div style='display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid #eef3fb;'><div><strong>{{ c.name }}</strong></div><form method='post' style='margin:0;'><input type='hidden' name='form_type' value='delete_class'><input type='hidden' name='class_id' value='{{ c.id }}'><button type='submit' class='danger'>Supprimer</button></form></div>{% else %}<p class='muted'>Aucune classe.</p>{% endfor %}
+        {% for c in classes %}
+          <div style='display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid #eef3fb;'>
+            <div><strong>{{ c.name }}</strong></div>
+            <form method='post' style='margin:0;'>
+              <input type='hidden' name='form_type' value='delete_class'>
+              <input type='hidden' name='class_id' value='{{ c.id }}'>
+              <button type='submit' class='danger'>Supprimer</button>
+            </form>
+          </div>
+        {% else %}
+          <p class='muted'>Aucune classe.</p>
+        {% endfor %}
       </div>
       <div class='card'>
         <h2>Matières</h2>
-        {% for s in subjects %}<div style='display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid #eef3fb;'><div><strong>{{ s.name }}</strong></div><form method='post' style='margin:0;'><input type='hidden' name='form_type' value='delete_subject'><input type='hidden' name='subject_id' value='{{ s.id }}'><button type='submit' class='danger'>Supprimer</button></form></div>{% else %}<p class='muted'>Aucune matière.</p>{% endfor %}
+        {% for s in subjects %}
+          <div style='display:flex; justify-content:space-between; align-items:center; gap:12px; padding:12px 0; border-bottom:1px solid #eef3fb;'>
+            <div><strong>{{ s.name }}</strong></div>
+            <form method='post' style='margin:0;'>
+              <input type='hidden' name='form_type' value='delete_subject'>
+              <input type='hidden' name='subject_id' value='{{ s.id }}'>
+              <button type='submit' class='danger'>Supprimer</button>
+            </form>
+          </div>
+        {% else %}
+          <p class='muted'>Aucune matière.</p>
+        {% endfor %}
       </div>
     </div>
     """
