@@ -12,3 +12,4 @@ jobs:
       - name: Ping website
         run: |
           curl -I https://pronotesite.onrender.com/site-access
+          curl -I https://pronotesite.onrender.com/site-access
