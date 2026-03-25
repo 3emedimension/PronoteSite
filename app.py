@@ -978,6 +978,38 @@ BASE_TOP = """
     }
     * { box-sizing: border-box; }
     body { margin:0; font-family:Inter,Arial,Helvetica,sans-serif; background:var(--bg); color:var(--text); transition:background 0.3s,color 0.3s; }
+    /* Dark mode overrides for elements that don't use variables */
+    [data-theme='dark'] .hero { background:linear-gradient(135deg,#1e3a8a,#1d4ed8); }
+    [data-theme='dark'] .nav { background:linear-gradient(90deg,#020617,#0f172a); }
+    [data-theme='dark'] select option { background:#1e293b; color:#e2e8f0; }
+    [data-theme='dark'] .edt-wrap { background:transparent; }
+    [data-theme='dark'] .day-card { background:#1e293b; border-color:#334155; }
+    [data-theme='dark'] .course { border-bottom-color:#334155; }
+    [data-theme='dark'] .subject { color:#e2e8f0; }
+    [data-theme='dark'] .hour { background:#1e3a8a; color:#93c5fd; }
+    [data-theme='dark'] .week-btn { background:linear-gradient(135deg,#1e293b,#334155); color:#93c5fd; }
+    [data-theme='dark'] .week-btn.active { background:linear-gradient(135deg,#1d4ed8,#2563eb); color:white; }
+    [data-theme='dark'] .wa-wrap { background:#0f172a; }
+    [data-theme='dark'] .wa-sidebar { background:#1e293b; border-right-color:#334155; }
+    [data-theme='dark'] .wa-sidebar-header { background:#1a2540; }
+    [data-theme='dark'] .wa-sidebar-header h2 { color:#e2e8f0; }
+    [data-theme='dark'] .wa-contact-item { border-bottom-color:#334155; }
+    [data-theme='dark'] .wa-contact-item:hover,.wa-contact-item.active { background:#1a2540; }
+    [data-theme='dark'] .wa-contact-name { color:#e2e8f0; }
+    [data-theme='dark'] .wa-messages-area { background:#0f172a; background-image:none; }
+    [data-theme='dark'] .wa-msg.theirs .wa-bubble { background:#1e293b; color:#e2e8f0; }
+    [data-theme='dark'] .wa-msg.mine .wa-bubble { background:#1e3a8a; color:#e2e8f0; }
+    [data-theme='dark'] .wa-input-bar { background:#1a2540; border-top-color:#334155; }
+    [data-theme='dark'] .wa-input-bar input { background:#1e293b; color:#e2e8f0; }
+    [data-theme='dark'] .wa-chat-header { background:#1a2540; border-bottom-color:#334155; }
+    [data-theme='dark'] .wa-chat-header-name { color:#e2e8f0; }
+    [data-theme='dark'] .wa-empty { background:#0f172a; }
+    [data-theme='dark'] .wa-sidebar-tabs { background:#1e293b; border-bottom-color:#334155; }
+    [data-theme='dark'] .wa-modal { background:#1e293b; color:#e2e8f0; }
+    [data-theme='dark'] .member-check-list { border-color:#334155; }
+    [data-theme='dark'] .member-check-item:hover { background:#1a2540; }
+    [data-theme='dark'] .profile-tab { background:#1e293b; border-color:#334155; color:#93c5fd; }
+    [data-theme='dark'] .profile-tab.active { background:linear-gradient(90deg,#1d4ed8,#2563eb); color:white; border-color:transparent; }
     .nav { background:linear-gradient(90deg,#0f172a,#1d4ed8); color:white; padding:0 18px; height:62px; display:flex; align-items:center; justify-content:space-between; gap:12px; box-shadow:0 4px 20px rgba(15,23,42,0.28); position:sticky; top:0; z-index:100; }
     .brand-wrap { display:flex; align-items:center; gap:10px; min-width:0; text-decoration:none; }
     .brand-wrap strong { font-size:18px; color:white; white-space:nowrap; }
@@ -1001,7 +1033,7 @@ BASE_TOP = """
     .user-pill:hover { background:rgba(255,255,255,0.18); transform:none; }
     .user-pill-avatar { width:30px; height:30px; border-radius:50%; object-fit:cover; border:2px solid rgba(255,255,255,0.4); flex-shrink:0; background:#1e40af; display:flex; align-items:center; justify-content:center; font-size:13px; font-weight:800; }
     .user-pill-name { max-width:90px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .user-pill-dropdown { display:none; position:absolute; top:calc(100% + 8px); right:0; background:#1e293b; border:1px solid rgba(255,255,255,0.12); border-radius:14px; min-width:180px; padding:6px; box-shadow:0 16px 40px rgba(0,0,0,0.45); z-index:400; }
+    .user-pill-dropdown { display:none; position:absolute; top:100%; right:0; background:#1e293b; border:1px solid rgba(255,255,255,0.12); border-radius:14px; min-width:180px; padding:14px 6px 6px; box-shadow:0 16px 40px rgba(0,0,0,0.45); z-index:400; }
     .user-pill-wrap { position:relative; }
     .user-pill-wrap:hover .user-pill-dropdown { display:block; }
     .user-pill-dropdown a { display:flex; align-items:center; gap:9px; color:white; text-decoration:none; padding:10px 12px; border-radius:9px; font-size:13px; font-weight:600; }
@@ -1058,9 +1090,17 @@ BASE_TOP = """
       .metric { font-size:28px; }
       table { min-width:560px; }
     }
+    /* Instant navigation */
+    a { transition: none !important; }
+    .nav-link, .mobile-drawer a { transition: background 0.1s !important; }
+    /* Page transition overlay */
+    #page-loader { display:none; position:fixed; inset:0; background:var(--bg); z-index:9999; align-items:center; justify-content:center; }
+    #page-loader.show { display:flex; }
   </style>
 </head>
 <body>
+<div id='page-loader'><div style='width:36px;height:36px;border:3px solid #1d4ed8;border-top-color:transparent;border-radius:50%;animation:spin 0.5s linear infinite;'></div></div>
+<style>@keyframes spin{to{transform:rotate(360deg);}}</style>
 <script>
 (function(){var t=localStorage.getItem('theme')||'light';document.documentElement.setAttribute('data-theme',t);})();
 </script>
@@ -1168,6 +1208,22 @@ function openDrawer(){document.getElementById('mobileDrawer').classList.add('ope
 function closeDrawer(){document.getElementById('mobileDrawer').classList.remove('open');document.getElementById('mobileOverlay').classList.remove('show');document.body.style.overflow='';}
 function toggleDark(){var next=document.documentElement.getAttribute('data-theme')=='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',next);localStorage.setItem('theme',next);document.querySelectorAll('.dark-toggle').forEach(function(b){b.textContent=next==='dark'?'☀️':'🌙';});}
 (function(){var t=localStorage.getItem('theme')||'light';document.querySelectorAll('.dark-toggle').forEach(function(b){b.textContent=t==='dark'?'☀️':'🌙';});})();
+// Instant page navigation
+document.addEventListener('DOMContentLoaded',function(){
+  var loader=document.getElementById('page-loader');
+  document.querySelectorAll('a[href]').forEach(function(a){
+    var href=a.getAttribute('href');
+    if(href&&href.startsWith('/')&&!href.startsWith('//')&&!a.target){
+      a.addEventListener('click',function(e){
+        if(!e.metaKey&&!e.ctrlKey&&!e.shiftKey){
+          loader.classList.add('show');
+        }
+      });
+    }
+  });
+  // Hide loader when page is ready
+  window.addEventListener('pageshow',function(){loader.classList.remove('show');});
+});
 </script>
 """
 
@@ -1904,16 +1960,7 @@ def dashboard():
       {% endfor %}
     </div>
     <div class='grid' style='margin-top:18px;'>
-      <div class='card'>
-        <h2>Accès rapide</h2>
-        <p><a href='{{ url_for("general_info_page") }}'>Voir les infos générales</a></p>
-        <p><a href='{{ url_for("grades") }}'>Voir les notes</a></p>
-        <p><a href='{{ url_for("homework_page") }}'>Voir les devoirs</a></p>
-        <p><a href='{{ url_for("schedule_page") }}'>Voir l'emploi du temps</a></p>
-        <p><a href='{{ url_for("absences_page") }}'>Voir les absences</a></p>
-        <p><a href='{{ url_for("messages_page") }}'>Ouvrir la messagerie</a></p>
-        <p><a href='{{ url_for("settings_page") }}'>Mon profil</a></p>
-      </div>
+
       <div class='card'>
         <h2>Derniers messages</h2>
         {% for m in latest_messages %}
