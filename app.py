@@ -37,7 +37,7 @@ app.config["SESSION_COOKIE_SECURE"] = False  # Mettre True si HTTPS uniquement
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
 USE_POSTGRES = bool(DATABASE_URL and psycopg2)
-DB_NAME = "cartable_v1.db"
+DB_NAME = "renote_v1.db"
 ADMIN_DEFAULT_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Azsqerfd2012")
 SITE_PASSWORD = os.environ.get("SITE_PASSWORD", "EcoleR2026")
 
@@ -187,7 +187,7 @@ def is_image_file(filename: str) -> bool:
     return "." in filename and filename.rsplit(".", 1)[1].lower() in IMAGE_EXTENSIONS
 
 
-def upload_to_cloudinary(file_storage, folder="cartable_uploads", resource_type="auto"):
+def upload_to_cloudinary(file_storage, folder="renote_uploads", resource_type="auto"):
     try:
         result = cloudinary.uploader.upload(
             file_storage,
@@ -1070,7 +1070,7 @@ NAV = """
 <div class='nav'>
   <a href='{{ url_for("dashboard") if session.get("user_id") else url_for("login") }}' class='brand-wrap'>
     <img src='data:image/png;base64,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' alt='Logo' style='height:42px;width:42px;object-fit:contain;border-radius:8px;flex-shrink:0;'>
-    <strong>Cartable</strong>
+    <strong>Renote</strong>
   </a>
   <div class='nav-right'>
     <button class='dark-toggle' onclick='toggleDark()'>🌙</button>
@@ -1415,7 +1415,7 @@ def settings_page():
             old_user = query_one("SELECT profile_picture FROM users WHERE id = ?", (user["id"],))
             if old_user and old_user.get("profile_picture"):
                 delete_from_cloudinary(old_user["profile_picture"], resource_type="image")
-            public_id, secure_url = upload_to_cloudinary(uploaded, folder="cartable_profiles", resource_type="image")
+            public_id, secure_url = upload_to_cloudinary(uploaded, folder="renote_profiles", resource_type="image")
             if not public_id or not secure_url:
                 flash("Impossible d'enregistrer la photo de profil.")
                 return redirect(url_for("settings_page"))
@@ -2248,7 +2248,7 @@ def homework_page():
                 resource_type = "image" if is_image_file(original_name) else "raw"
                 attachment_public_id, attachment_url = upload_to_cloudinary(
                     uploaded,
-                    folder="cartable_homework",
+                    folder="renote_homework",
                     resource_type=resource_type,
                 )
                 if not attachment_public_id:
@@ -2318,7 +2318,7 @@ def homework_page():
                     delete_from_cloudinary(new_public_id, resource_type=resource_type)
 
                 resource_type = "image" if is_image_file(original_name) else "raw"
-                new_public_id, new_url = upload_to_cloudinary(uploaded, folder="cartable_homework", resource_type=resource_type)
+                new_public_id, new_url = upload_to_cloudinary(uploaded, folder="renote_homework", resource_type=resource_type)
                 new_name = original_name
 
             execute_db(
@@ -3578,7 +3578,7 @@ def messages_page():
       <!-- Écran vide -->
       <div class='wa-empty'>
         <div class='wa-empty-icon'>💬</div>
-        <h2 style='color:#3d4043; font-size:22px; margin-bottom:8px;'>Cartable Messagerie</h2>
+        <h2 style='color:#3d4043; font-size:22px; margin-bottom:8px;'>Renote Messagerie</h2>
         <p style='font-size:15px;'>Sélectionne un contact ou un groupe pour commencer à discuter</p>
       </div>
     {% endif %}
@@ -4334,7 +4334,7 @@ def bulletin_pdf():
     <div class='header'>
       <h1>📋 Bulletin scolaire</h1>
       <p>Généré le {datetime.now().strftime('%d/%m/%Y à %H:%M')}</p>
-      <p>Cartable — Cartable</p>
+      <p>Renote — Renote</p>
     </div>""")
 
     for student in students_data:
@@ -4412,7 +4412,7 @@ def bulletin_pdf():
             html_parts.append("<p style='color:#166534;font-weight:700;'>✅ Aucune absence enregistrée.</p>")
 
     html_parts.append(f"""
-    <div class='footer'>Document généré automatiquement par Cartable · {datetime.now().strftime('%d/%m/%Y')}</div>
+    <div class='footer'>Document généré automatiquement par Renote · {datetime.now().strftime('%d/%m/%Y')}</div>
     </div></body></html>""")
 
     full_html = "".join(html_parts)
