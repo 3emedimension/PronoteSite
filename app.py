@@ -706,6 +706,52 @@ def init_db():
             [("Mathématiques",), ("Français",), ("Histoire",), ("Anglais",), ("SVT",), ("Physique",)],
         )
 
+    # Tables vie de classe
+    if not table_exists("vie_posts"):
+        if USE_POSTGRES:
+            execute_db("""
+                CREATE TABLE IF NOT EXISTS vie_posts (
+                    id SERIAL PRIMARY KEY,
+                    author_id INTEGER NOT NULL REFERENCES users(id),
+                    body TEXT,
+                    image_url TEXT,
+                    image_public_id TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+            execute_db("""
+                CREATE TABLE IF NOT EXISTS vie_reactions (
+                    id SERIAL PRIMARY KEY,
+                    post_id INTEGER NOT NULL REFERENCES vie_posts(id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    emoji TEXT NOT NULL,
+                    UNIQUE(post_id, user_id)
+                )
+            """)
+        else:
+            execute_db("""
+                CREATE TABLE IF NOT EXISTS vie_posts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    author_id INTEGER NOT NULL,
+                    body TEXT,
+                    image_url TEXT,
+                    image_public_id TEXT,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(author_id) REFERENCES users(id)
+                )
+            """)
+            execute_db("""
+                CREATE TABLE IF NOT EXISTS vie_reactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    post_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    emoji TEXT NOT NULL,
+                    UNIQUE(post_id, user_id),
+                    FOREIGN KEY(post_id) REFERENCES vie_posts(id),
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                )
+            """)
+
     # Table notifications vues
     if not table_exists("notif_seen"):
         if USE_POSTGRES:
@@ -1176,6 +1222,7 @@ NAV = """
     <a href='{{ url_for("homework_page") }}' onclick='closeDrawer()'>📚 Devoirs</a>
     <a href='{{ url_for("schedule_page") }}' onclick='closeDrawer()'>🗓️ Emploi du temps</a>
     <a href='{{ url_for("absences_page") }}' onclick='closeDrawer()'>📋 Absences</a>
+    <a href='{{ url_for("vie_de_classe") }}' onclick='closeDrawer()'>🌸 Vie de classe</a>
     <a href='{{ url_for("messages_page") }}' onclick='closeDrawer()'>💬 Messagerie
       {% if g.notif_count and g.notif_count > 0 %}<span style='background:#ef4444;color:white;border-radius:999px;font-size:10px;font-weight:800;padding:2px 6px;margin-left:6px;'>nouveau</span>{% endif %}
     </a>
@@ -1973,6 +2020,35 @@ def dashboard():
         {% endfor %}
       </div>
     </div>
+    <div class='card' style='margin-top:18px; border:1px solid rgba(139,92,246,0.2); box-shadow:0 8px 24px rgba(139,92,246,0.08);'>
+      <div style='display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; flex-wrap:wrap; gap:10px;'>
+        <h2 style='margin:0; background:linear-gradient(135deg,#f59e0b,#ec4899,#8b5cf6); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text;'>🌸 Vie de classe</h2>
+        <a href='{{ url_for("vie_de_classe") }}' style='font-size:13px; color:#8b5cf6; font-weight:700; text-decoration:none;'>Voir tout →</a>
+      </div>
+      {% if last_vie_posts %}
+        {% for vp in last_vie_posts %}
+          <div style='display:flex; gap:12px; align-items:flex-start; padding:12px 0; border-bottom:1px solid var(--table-border);'>
+            {% if vp.author_pic %}
+              <img src='{{ vp.author_pic }}' style='width:36px;height:36px;border-radius:50%;object-fit:cover;flex-shrink:0;'>
+            {% else %}
+              <div style='width:36px;height:36px;border-radius:50%;background:linear-gradient(135deg,#8b5cf6,#ec4899);display:flex;align-items:center;justify-content:center;font-size:15px;font-weight:800;color:white;flex-shrink:0;'>{{ vp.author_name[:1] }}</div>
+            {% endif %}
+            <div style='flex:1;min-width:0;'>
+              <div style='font-weight:700;font-size:14px;color:var(--text);'>{{ vp.author_name }}</div>
+              {% if vp.body %}<div style='font-size:13px;color:var(--text-muted);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'>{{ vp.body[:80] }}{% if vp.body|length > 80 %}...{% endif %}</div>{% endif %}
+              {% if vp.image_url and not vp.body %}<div style='font-size:13px;color:var(--text-muted);margin-top:2px;'>📷 Photo partagée</div>{% endif %}
+              <div style='font-size:11px;color:var(--text-muted);margin-top:4px;'>{{ vp.created_at }}</div>
+            </div>
+            {% if vp.image_url %}
+              <img src='{{ vp.image_url }}' style='width:52px;height:52px;border-radius:10px;object-fit:cover;flex-shrink:0;'>
+            {% endif %}
+          </div>
+        {% endfor %}
+      {% else %}
+        <p style='color:var(--text-muted);font-size:14px;text-align:center;padding:20px 0;'>Aucune publication pour le moment 📷</p>
+      {% endif %}
+    </div>
+
     <div class='card' style='margin-top:18px;'>
       <h2>Infos générales récentes</h2>
       {% for info in general_infos %}
@@ -1987,6 +2063,14 @@ def dashboard():
       <p><a href='{{ url_for("general_info_page") }}'>Voir toutes les infos</a></p>
     </div>
     """
+    last_vie_posts = query_all(
+        """
+        SELECT vp.*, u.full_name AS author_name, u.profile_picture_url AS author_pic
+        FROM vie_posts vp JOIN users u ON u.id = vp.author_id
+        ORDER BY vp.id DESC LIMIT 3
+        """
+    )
+
     return render_page(
         content,
         title="Tableau de bord",
@@ -1995,6 +2079,7 @@ def dashboard():
         latest_messages=latest_messages,
         parent_child_names=parent_child_names,
         general_infos=general_infos,
+        last_vie_posts=last_vie_posts,
     )
 
 
@@ -4472,6 +4557,283 @@ def bulletin_pdf():
     response.headers["Content-Type"] = "text/html; charset=utf-8"
     response.headers["Content-Disposition"] = f"attachment; filename=bulletin_{student_name}_{datetime.now().strftime('%Y%m%d')}.html"
     return response
+
+
+# =========================
+# Vie de classe
+# =========================
+@app.route("/vie-de-classe", methods=["GET", "POST"])
+@login_required
+def vie_de_classe():
+    user = g.user
+    EMOJIS = ["❤️", "😂", "😮", "👏", "🔥", "🌟"]
+
+    if request.method == "POST":
+        action = request.form.get("action", "")
+
+        if action == "post":
+            if user["role"] not in ["prof", "admin"]:
+                flash("Seul un prof ou admin peut publier.")
+                return redirect(url_for("vie_de_classe"))
+            body = request.form.get("body", "").strip()
+            uploaded = request.files.get("image")
+            image_url = None
+            image_public_id = None
+            if uploaded and uploaded.filename and allowed_profile_image(uploaded.filename):
+                image_public_id, image_url = upload_to_cloudinary(uploaded, folder="renote_vie", resource_type="image")
+            if not body and not image_url:
+                flash("Ajoute du texte ou une image.")
+                return redirect(url_for("vie_de_classe"))
+            execute_db(
+                "INSERT INTO vie_posts (author_id, body, image_url, image_public_id, created_at) VALUES (?, ?, ?, ?, ?)",
+                (user["id"], body or None, image_url, image_public_id, current_timestamp())
+            )
+            log_event("Post vie de classe", user=user, entity_type="vie_post")
+            return redirect(url_for("vie_de_classe"))
+
+        elif action == "react":
+            post_id = request.form.get("post_id")
+            emoji = request.form.get("emoji")
+            if emoji not in EMOJIS:
+                return redirect(url_for("vie_de_classe"))
+            existing = query_one("SELECT id, emoji FROM vie_reactions WHERE post_id = ? AND user_id = ?", (post_id, user["id"]))
+            if existing:
+                if existing["emoji"] == emoji:
+                    execute_db("DELETE FROM vie_reactions WHERE post_id = ? AND user_id = ?", (post_id, user["id"]))
+                else:
+                    execute_db("UPDATE vie_reactions SET emoji = ? WHERE post_id = ? AND user_id = ?", (emoji, post_id, user["id"]))
+            else:
+                try:
+                    execute_db("INSERT INTO vie_reactions (post_id, user_id, emoji) VALUES (?, ?, ?)", (post_id, user["id"], emoji))
+                except Exception:
+                    pass
+            return redirect(url_for("vie_de_classe"))
+
+        elif action == "delete":
+            if user["role"] not in ["prof", "admin"]:
+                return redirect(url_for("vie_de_classe"))
+            post_id = request.form.get("post_id")
+            post = query_one("SELECT * FROM vie_posts WHERE id = ?", (post_id,))
+            if post:
+                if user["role"] == "admin" or str(post["author_id"]) == str(user["id"]):
+                    if post.get("image_public_id"):
+                        delete_from_cloudinary(post["image_public_id"], resource_type="image")
+                    execute_db("DELETE FROM vie_posts WHERE id = ?", (post_id,))
+            return redirect(url_for("vie_de_classe"))
+
+    posts = query_all(
+        """
+        SELECT vp.*, u.full_name AS author_name, u.profile_picture_url AS author_pic, u.role AS author_role
+        FROM vie_posts vp JOIN users u ON u.id = vp.author_id
+        ORDER BY vp.id DESC
+        """
+    )
+
+    # Load reactions for each post
+    all_reactions = query_all("SELECT post_id, emoji, COUNT(*) AS cnt FROM vie_reactions GROUP BY post_id, emoji")
+    my_reactions = query_all("SELECT post_id, emoji FROM vie_reactions WHERE user_id = ?", (user["id"],))
+    my_react_map = {r["post_id"]: r["emoji"] for r in my_reactions}
+    react_map = {}
+    for r in all_reactions:
+        pid = r["post_id"]
+        if pid not in react_map:
+            react_map[pid] = {}
+        react_map[pid][r["emoji"]] = r["cnt"]
+
+    import json
+    react_map_json = json.dumps(react_map)
+    my_react_json = json.dumps(my_react_map)
+
+    page_html = BASE_TOP + NAV + """
+<style>
+  .vie-wrap {
+    max-width: 680px;
+    margin: 32px auto;
+    padding: 0 18px;
+  }
+  .vie-header {
+    text-align: center;
+    margin-bottom: 28px;
+  }
+  .vie-header h1 {
+    font-size: 28px;
+    font-weight: 900;
+    background: linear-gradient(135deg, #f59e0b, #ec4899, #8b5cf6);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 6px;
+  }
+  .vie-header p { color: var(--text-muted); font-size: 14px; }
+  .vie-post-form {
+    background: var(--card);
+    border-radius: 22px;
+    padding: 20px;
+    margin-bottom: 24px;
+    box-shadow: 0 8px 24px rgba(139,92,246,0.10);
+    border: 1px solid rgba(139,92,246,0.15);
+  }
+  .vie-post-form textarea {
+    border-color: rgba(139,92,246,0.25);
+    border-radius: 14px;
+    resize: none;
+    min-height: 80px;
+    font-size: 15px;
+  }
+  .vie-post-form textarea:focus { border-color: #8b5cf6; box-shadow: 0 0 0 4px rgba(139,92,246,0.12); }
+  .vie-post-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .vie-post-btn {
+    background: linear-gradient(135deg, #8b5cf6, #ec4899);
+    color: white; border: none; padding: 10px 20px;
+    border-radius: 12px; font-weight: 700; cursor: pointer;
+    font-size: 14px; box-shadow: 0 6px 16px rgba(139,92,246,0.25);
+  }
+  .vie-post-btn:hover { transform: translateY(-1px); }
+  .vie-file-label {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--admin-box); border: 1px solid var(--admin-box-border);
+    padding: 9px 14px; border-radius: 12px; cursor: pointer;
+    font-size: 13px; font-weight: 600; color: var(--text-muted);
+  }
+  .vie-file-label:hover { background: var(--table-th); }
+  .vie-post-card {
+    background: var(--card);
+    border-radius: 22px;
+    margin-bottom: 20px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.06);
+    border: 1px solid var(--card-border);
+    overflow: hidden;
+  }
+  .vie-post-head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 16px 18px 12px;
+  }
+  .vie-post-avatar {
+    width: 42px; height: 42px; border-radius: 50%;
+    object-fit: cover; flex-shrink: 0;
+    background: linear-gradient(135deg, #8b5cf6, #ec4899);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px; font-weight: 800; color: white;
+  }
+  .vie-post-author { font-weight: 700; font-size: 15px; color: var(--text); }
+  .vie-post-time { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+  .vie-post-body { padding: 0 18px 14px; font-size: 15px; line-height: 1.65; color: var(--text); white-space: pre-wrap; }
+  .vie-post-img { width: 100%; max-height: 480px; object-fit: cover; display: block; }
+  .vie-post-footer { padding: 12px 18px 16px; border-top: 1px solid var(--table-border); }
+  .vie-emojis { display: flex; gap: 8px; flex-wrap: wrap; }
+  .vie-emoji-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: var(--admin-box); border: 1px solid var(--admin-box-border);
+    border-radius: 999px; padding: 6px 12px; cursor: pointer;
+    font-size: 15px; font-weight: 700; color: var(--text);
+    transition: all 0.15s; box-shadow: none;
+  }
+  .vie-emoji-btn:hover { transform: scale(1.08); }
+  .vie-emoji-btn.active {
+    background: linear-gradient(135deg, #8b5cf6, #ec4899);
+    border-color: transparent; color: white;
+    box-shadow: 0 4px 12px rgba(139,92,246,0.25);
+  }
+  .vie-emoji-count { font-size: 12px; }
+  .vie-delete-btn {
+    background: none; border: none; color: var(--text-muted);
+    cursor: pointer; font-size: 13px; padding: 4px 8px;
+    border-radius: 8px; margin-left: auto; box-shadow: none;
+  }
+  .vie-delete-btn:hover { background: #fee2e2; color: #dc2626; transform: none; }
+  [data-theme='dark'] .vie-post-card { box-shadow: 0 8px 24px rgba(0,0,0,0.25); }
+  [data-theme='dark'] .vie-emoji-btn { background: #1e293b; border-color: #334155; }
+  [data-theme='dark'] .vie-delete-btn:hover { background: #3b1010; color: #f87171; }
+</style>
+
+<div class='vie-wrap'>
+  <div class='vie-header'>
+    <h1>🌸 Vie de classe</h1>
+    <p>Photos, moments et nouvelles de la classe</p>
+  </div>
+
+  {% if user.role in ['prof', 'admin'] %}
+  <div class='vie-post-form'>
+    <form method='post' enctype='multipart/form-data'>
+      <input type='hidden' name='action' value='post'>
+      <textarea name='body' placeholder='Partage un moment de classe, une nouvelle, une photo...' style='width:100%;margin-bottom:12px;'></textarea>
+      <div class='vie-post-actions'>
+        <label class='vie-file-label'>
+          📷 Photo
+          <input type='file' name='image' accept='image/*' style='display:none;' onchange="this.parentNode.querySelector('span') && (this.parentNode.querySelector('span').textContent = this.files[0]?.name || '')">
+        </label>
+        <button type='submit' class='vie-post-btn'>✨ Publier</button>
+      </div>
+    </form>
+  </div>
+  {% endif %}
+
+  {% if not posts %}
+    <div style='text-align:center; padding:60px 20px; color:var(--text-muted);'>
+      <div style='font-size:56px; margin-bottom:16px;'>📷</div>
+      <p>Aucune publication pour le moment.<br>Les profs peuvent partager des photos et moments ici.</p>
+    </div>
+  {% endif %}
+
+  {% for post in posts %}
+  <div class='vie-post-card'>
+    <div class='vie-post-head'>
+      {% if post.author_pic %}
+        <img src='{{ post.author_pic }}' class='vie-post-avatar'>
+      {% else %}
+        <div class='vie-post-avatar'>{{ post.author_name[:1] }}</div>
+      {% endif %}
+      <div style='flex:1;'>
+        <div class='vie-post-author'>{{ post.author_name }}</div>
+        <div class='vie-post-time'>{{ post.created_at }}</div>
+      </div>
+      {% if user.role == 'admin' or post.author_id == user.id %}
+      <form method='post' style='margin:0;' onsubmit="return confirm('Supprimer ce post ?');">
+        <input type='hidden' name='action' value='delete'>
+        <input type='hidden' name='post_id' value='{{ post.id }}'>
+        <button type='submit' class='vie-delete-btn'>🗑️</button>
+      </form>
+      {% endif %}
+    </div>
+    {% if post.image_url %}
+      <img src='{{ post.image_url }}' class='vie-post-img' alt='Photo'>
+    {% endif %}
+    {% if post.body %}
+      <div class='vie-post-body'>{{ post.body }}</div>
+    {% endif %}
+    <div class='vie-post-footer'>
+      <div class='vie-emojis' id='emojis-{{ post.id }}'>
+        {% for emoji in emojis %}
+          {% set count = react_map.get(post.id, {}).get(emoji, 0) %}
+          {% set is_mine = my_react_map.get(post.id) == emoji %}
+          <form method='post' style='margin:0;display:inline;'>
+            <input type='hidden' name='action' value='react'>
+            <input type='hidden' name='post_id' value='{{ post.id }}'>
+            <input type='hidden' name='emoji' value='{{ emoji }}'>
+            <button type='submit' class='vie-emoji-btn {% if is_mine %}active{% endif %}'>
+              {{ emoji }}{% if count > 0 %}<span class='vie-emoji-count'>{{ count }}</span>{% endif %}
+            </button>
+          </form>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+</body></html>
+"""
+    return render_template_string(
+        page_html,
+        title="Vie de classe",
+        user=user,
+        posts=posts,
+        emojis=EMOJIS,
+        react_map={int(k): v for k,v in __import__('json').loads(react_map_json).items()},
+        my_react_map={int(k): v for k,v in __import__('json').loads(my_react_json).items()},
+        session=session,
+        url_for=url_for,
+        g=g,
+    )
 
 
 @app.after_request
