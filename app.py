@@ -706,6 +706,66 @@ def init_db():
             [("Mathématiques",), ("Français",), ("Histoire",), ("Anglais",), ("SVT",), ("Physique",)],
         )
 
+    # Colonnes question secrète
+    if not table_has_column("users", "secret_question"):
+        execute_db("ALTER TABLE users ADD COLUMN secret_question TEXT")
+    if not table_has_column("users", "secret_answer"):
+        execute_db("ALTER TABLE users ADD COLUMN secret_answer TEXT")
+
+    # Table pièces jointes multiples devoirs
+    if not table_exists("homework_attachments"):
+        if USE_POSTGRES:
+            execute_db("""
+                CREATE TABLE IF NOT EXISTS homework_attachments (
+                    id SERIAL PRIMARY KEY,
+                    homework_id INTEGER NOT NULL REFERENCES homework(id) ON DELETE CASCADE,
+                    public_id TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+            """)
+        else:
+            execute_db("""
+                CREATE TABLE IF NOT EXISTS homework_attachments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    homework_id INTEGER NOT NULL,
+                    public_id TEXT NOT NULL,
+                    url TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(homework_id) REFERENCES homework(id)
+                )
+            """)
+
+    # Table reset mot de passe
+    if not table_exists("password_resets"):
+        if USE_POSTGRES:
+            execute_db("""
+                CREATE TABLE IF NOT EXISTS password_resets (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    username TEXT NOT NULL,
+                    full_name TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'En attente',
+                    created_at TEXT NOT NULL,
+                    resolved_at TEXT
+                )
+            """)
+        else:
+            execute_db("""
+                CREATE TABLE IF NOT EXISTS password_resets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    username TEXT NOT NULL,
+                    full_name TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'En attente',
+                    created_at TEXT NOT NULL,
+                    resolved_at TEXT,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                )
+            """)
+
     # Tables vie de classe
     if not table_exists("vie_posts"):
         if USE_POSTGRES:
@@ -1378,6 +1438,7 @@ def login():
             <input name='password' type='password' required>
             <button type='submit'>Se connecter</button>
           </form>
+          <p style='margin-top:12px;text-align:center;'><a href='{{ url_for("forgot_password") }}' style='color:#6366f1;font-size:13px;font-weight:600;'>🔑 Mot de passe oublié ?</a></p>
         </div>
         <div class='card'>
           <h2>Fonctions</h2>
@@ -1425,9 +1486,11 @@ def register():
             child_id_2 = None
 
         try:
+            secret_q = request.form.get("secret_question", "").strip()
+            secret_a = request.form.get("secret_answer", "").strip().lower()
             execute_db(
-                "INSERT INTO users (username, password, role, full_name, class_id, child_id, child_id_2, profile_picture, profile_picture_url, created_at, last_login_at, login_count) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, 0)",
-                (username, generate_password_hash(password), role, full_name, class_id, child_id, child_id_2, current_timestamp()),
+                "INSERT INTO users (username, password, role, full_name, class_id, child_id, child_id_2, profile_picture, profile_picture_url, created_at, last_login_at, login_count, secret_question, secret_answer) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, NULL, 0, ?, ?)",
+                (username, generate_password_hash(password), role, full_name, class_id, child_id, child_id_2, current_timestamp(), secret_q or None, secret_a or None),
             )
             new_user = query_one("SELECT id, username, role, full_name FROM users WHERE username = ?", (username,))
             log_event("Création de compte", user=new_user, details=f"Nouveau compte créé ({role})", entity_type="user", entity_id=new_user["id"] if new_user else None)
@@ -1467,6 +1530,20 @@ def register():
             <option value=''>Aucun</option>
             {% for s in students %}<option value='{{ s.id }}'>{{ s.full_name }}</option>{% endfor %}
           </select>
+        </div>
+        <div id='secret_block'>
+          <label>Question secrète</label>
+          <select name='secret_question' required>
+            <option value=''>-- Choisir une question --</option>
+            <option>Quel est le prénom de ta mère ?</option>
+            <option>Quel est le nom de ton animal de compagnie ?</option>
+            <option>Quelle est ta ville de naissance ?</option>
+            <option>Quel est le prénom de ton meilleur ami ?</option>
+            <option>Quel est ton plat préféré ?</option>
+            <option>Quel est le prénom de ton père ?</option>
+          </select>
+          <label>Réponse secrète <span class='muted small'>(en minuscules)</span></label>
+          <input name='secret_answer' placeholder='Ta réponse...' autocomplete='off'>
         </div>
         <button type='submit'>Créer le compte</button>
       </form>
@@ -1548,6 +1625,8 @@ def settings_page():
                 flash("Ce nom d'utilisateur est déjà utilisé.")
                 return redirect(url_for("settings_page"))
 
+            new_secret_q = request.form.get("secret_question", "").strip()
+            new_secret_a = request.form.get("secret_answer", "").strip().lower()
             if new_password:
                 if len(new_password) < 6:
                     flash("Le mot de passe doit faire au moins 6 caractères.")
@@ -1564,6 +1643,10 @@ def settings_page():
                     "UPDATE users SET full_name = ?, username = ? WHERE id = ?",
                     (new_full_name, new_username, user["id"]),
                 )
+            if new_secret_q:
+                execute_db("UPDATE users SET secret_question = ? WHERE id = ?", (new_secret_q, user["id"]))
+            if new_secret_a:
+                execute_db("UPDATE users SET secret_answer = ? WHERE id = ?", (new_secret_a, user["id"]))
 
             # Mettre à jour la session
             session["full_name"] = new_full_name
@@ -1656,6 +1739,19 @@ def settings_page():
           <input type='password' name='new_password' autocomplete='new-password' placeholder='Minimum 6 caractères'>
           <label>Confirmer le nouveau mot de passe</label>
           <input type='password' name='confirm_password' autocomplete='new-password'>
+          <hr style='border:none;border-top:1px solid var(--input-border);margin:8px 0 16px;'>
+          <label style='font-weight:700;color:var(--text);'>🔑 Question secrète <span class='muted small'>(pour récupérer ton mot de passe)</span></label>
+          <select name='secret_question'>
+            <option value=''>-- Choisir une question --</option>
+            <option {% if user.secret_question == 'Quel est le prénom de ta mère ?' %}selected{% endif %}>Quel est le prénom de ta mère ?</option>
+            <option {% if user.secret_question == 'Quel est le nom de ton animal de compagnie ?' %}selected{% endif %}>Quel est le nom de ton animal de compagnie ?</option>
+            <option {% if user.secret_question == 'Quelle est ta ville de naissance ?' %}selected{% endif %}>Quelle est ta ville de naissance ?</option>
+            <option {% if user.secret_question == 'Quel est le prénom de ton meilleur ami ?' %}selected{% endif %}>Quel est le prénom de ton meilleur ami ?</option>
+            <option {% if user.secret_question == 'Quel est ton plat préféré ?' %}selected{% endif %}>Quel est ton plat préféré ?</option>
+            <option {% if user.secret_question == 'Quel est le prénom de ton père ?' %}selected{% endif %}>Quel est le prénom de ton père ?</option>
+          </select>
+          <label>Nouvelle réponse secrète <span class='muted small'>(laisser vide pour ne pas changer)</span></label>
+          <input name='secret_answer' placeholder='Ta réponse en minuscules...' autocomplete='off'>
           <button type='submit'>Enregistrer les modifications</button>
         </form>
       </div>
@@ -2380,30 +2476,11 @@ def homework_page():
                 flash("Remplis tous les champs du devoir.")
                 return redirect(url_for("homework_page"))
 
-            uploaded = request.files.get("attachment")
-            attachment_public_id = None
-            attachment_url = None
-            attachment_original_name = None
-
-            if uploaded and uploaded.filename:
-                original_name = secure_filename(uploaded.filename)
-                if not original_name or not allowed_file(original_name):
-                    flash("Type de fichier non autorisé.")
-                    return redirect(url_for("homework_page"))
-
-                attachment_original_name = original_name
-                resource_type = "image" if is_image_file(original_name) else "raw"
-                attachment_public_id, attachment_url = upload_to_cloudinary(
-                    uploaded,
-                    folder="renote_homework",
-                    resource_type=resource_type,
-                )
-                if not attachment_public_id:
-                    flash("Erreur pendant l'enregistrement de la pièce jointe.")
-                    return redirect(url_for("homework_page"))
+            # Gérer les pièces jointes multiples
+            uploaded_files = request.files.getlist("attachments")
 
             execute_db(
-                "INSERT INTO homework (class_id, subject_id, teacher_id, title, description, due_date, attachment, attachment_url, attachment_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO homework (class_id, subject_id, teacher_id, title, description, due_date, attachment, attachment_url, attachment_name, created_at) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)",
                 (
                     request.form.get("class_id") or None,
                     request.form.get("subject_id"),
@@ -2411,12 +2488,23 @@ def homework_page():
                     title,
                     description,
                     due_date,
-                    attachment_public_id,
-                    attachment_url,
-                    attachment_original_name,
                     datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 ),
             )
+            new_hw = query_one("SELECT id FROM homework WHERE teacher_id = ? ORDER BY id DESC LIMIT 1", (user["id"],))
+            if new_hw:
+                for f in uploaded_files:
+                    if f and f.filename:
+                        orig = secure_filename(f.filename)
+                        if not orig or not allowed_file(orig):
+                            continue
+                        rtype = "image" if is_image_file(orig) else "raw"
+                        pid, url = upload_to_cloudinary(f, folder="renote_homework", resource_type=rtype)
+                        if pid:
+                            execute_db(
+                                "INSERT INTO homework_attachments (homework_id, public_id, url, name, created_at) VALUES (?, ?, ?, ?, ?)",
+                                (new_hw["id"], pid, url, orig, current_timestamp())
+                            )
             flash("Devoir ajouté.")
             return redirect(url_for("homework_page"))
 
@@ -2553,6 +2641,7 @@ def homework_page():
             """
         )
 
+
     content = """
     <div class='grid'>
       {% if user.role in ['prof', 'admin'] %}
@@ -2567,7 +2656,8 @@ def homework_page():
           <label>Titre</label><input name='title' required>
           <label>Description</label><textarea name='description' required></textarea>
           <label>Date limite</label><input type='date' name='due_date' required>
-          <label>Pièce jointe</label><input type='file' name='attachment'>
+          <label>Pièces jointes <span class='muted small'>(plusieurs fichiers possibles)</span></label>
+          <input type='file' name='attachments' multiple accept='.pdf,.png,.jpg,.jpeg,.gif,.webp,.doc,.docx,.txt,.zip,.ppt,.pptx,.xls,.xlsx'>
           <button type='submit'>Publier</button>
         </form>
       </div>
@@ -2584,7 +2674,16 @@ def homework_page():
             </div>
             <p>{{ item.description }}</p>
             <p class='muted'>Classe : {{ item.class_name or 'Toutes' }} · Professeur : {{ item.teacher_name }} · Date limite : {{ item.due_date }}</p>
-            {% if item.attachment_url %}
+            {% set atts = hw_attachments.get(item.id, []) %}
+            {% if atts %}
+              <div style='margin-top:8px;display:flex;flex-wrap:wrap;gap:8px;'>
+                {% for att in atts %}
+                  <a href='{{ att.url }}' target='_blank' style='display:inline-flex;align-items:center;gap:6px;background:var(--admin-box);border:1px solid var(--admin-box-border);border-radius:10px;padding:6px 12px;font-size:13px;font-weight:600;color:#1d4ed8;text-decoration:none;'>
+                    📎 {{ att.name }}
+                  </a>
+                {% endfor %}
+              </div>
+            {% elif item.attachment_url %}
               <p><a href='{{ item.attachment_url }}' target='_blank'>📎 Télécharger : {{ item.attachment_name or 'pièce jointe' }}</a></p>
             {% endif %}
             {% if user.role in ['eleve', 'parent'] %}
@@ -2640,6 +2739,16 @@ def homework_page():
       </div>
     </div>
     """
+    # Pièces jointes multiples
+    hw_attachments = {}
+    if items:
+        hw_ids = [str(i["id"]) for i in items]
+        if hw_ids:
+            placeholders_att = ",".join(["?"] * len(hw_ids))
+            atts = query_all(f"SELECT * FROM homework_attachments WHERE homework_id IN ({placeholders_att}) ORDER BY id ASC", tuple(hw_ids))
+            for att in atts:
+                hw_attachments.setdefault(att["homework_id"], []).append(att)
+
     # IDs des devoirs cochés par l'utilisateur courant
     done_ids = set()
     if user["role"] in ["eleve", "parent"]:
@@ -2665,7 +2774,7 @@ def homework_page():
     else:
         total_students = 0
 
-    return render_page(content, title="Devoirs", user=user, items=items, subjects=subjects, classes=classes, done_ids=done_ids, completion_stats=completion_stats, total_students=total_students)
+    return render_page(content, title="Devoirs", user=user, items=items, subjects=subjects, classes=classes, done_ids=done_ids, completion_stats=completion_stats, total_students=total_students, hw_attachments=hw_attachments)
 
 
 # =========================
@@ -4861,6 +4970,141 @@ def vie_de_classe():
         url_for=url_for,
         g=g,
     )
+
+
+# =========================
+# Mot de passe oublié
+# =========================
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    if not session.get("site_unlocked"):
+        return redirect(url_for("site_access"))
+
+    step = request.args.get("step", "1")
+    error = None
+
+    if request.method == "POST":
+        step = request.form.get("step", "1")
+
+        # Étape 1 : vérifier le nom d'utilisateur
+        if step == "1":
+            username = request.form.get("username", "").strip()
+            user = query_one("SELECT id, username, full_name, secret_question, secret_answer FROM users WHERE username = ?", (username,))
+            if not user:
+                error = "Nom d'utilisateur introuvable."
+            elif not user.get("secret_question"):
+                error = "Aucune question secrète définie pour ce compte. Contacte l'administrateur."
+            else:
+                return render_page(
+                    _forgot_step2_content(),
+                    title="Mot de passe oublié",
+                    username=username,
+                    question=user["secret_question"],
+                    error=None,
+                )
+
+        # Étape 2 : vérifier la réponse
+        elif step == "2":
+            username = request.form.get("username", "").strip()
+            answer = request.form.get("answer", "").strip().lower()
+            user = query_one("SELECT id, username, full_name, secret_answer FROM users WHERE username = ?", (username,))
+            if not user or user.get("secret_answer") != answer:
+                user_q = query_one("SELECT secret_question FROM users WHERE username = ?", (username,))
+                return render_page(
+                    _forgot_step2_content(),
+                    title="Mot de passe oublié",
+                    username=username,
+                    question=user_q["secret_question"] if user_q else "",
+                    error="Réponse incorrecte. Réessaie.",
+                )
+            return render_page(
+                _forgot_step3_content(),
+                title="Mot de passe oublié",
+                username=username,
+                error=None,
+            )
+
+        # Étape 3 : nouveau mot de passe
+        elif step == "3":
+            username = request.form.get("username", "").strip()
+            new_password = request.form.get("new_password", "").strip()
+            confirm = request.form.get("confirm_password", "").strip()
+            user = query_one("SELECT id FROM users WHERE username = ?", (username,))
+            if not user:
+                flash("Erreur, recommence.")
+                return redirect(url_for("forgot_password"))
+            if len(new_password) < 6:
+                return render_page(_forgot_step3_content(), title="Mot de passe oublié", username=username, error="Minimum 6 caractères.")
+            if new_password != confirm:
+                return render_page(_forgot_step3_content(), title="Mot de passe oublié", username=username, error="Les mots de passe ne correspondent pas.")
+            execute_db("UPDATE users SET password = ? WHERE id = ?", (generate_password_hash(new_password), user["id"]))
+            log_event("Mot de passe réinitialisé via question secrète", details=f"Utilisateur: {username}", entity_type="user", entity_id=user["id"])
+            flash("✅ Mot de passe changé avec succès ! Tu peux te connecter.")
+            return redirect(url_for("login"))
+
+    return render_page(_forgot_step1_content(), title="Mot de passe oublié", error=error)
+
+
+def _forgot_step1_content():
+    return """
+    <div class='card' style='max-width:480px;margin:40px auto;border-top:4px solid #6366f1;'>
+      <div style='text-align:center;margin-bottom:20px;'>
+        <span style='font-size:44px;'>🔑</span>
+        <h1 style='background:linear-gradient(135deg,#6366f1,#8b5cf6);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin:10px 0 4px;'>Mot de passe oublié</h1>
+        <p class='muted'>Étape 1 sur 3 — Entre ton nom d'utilisateur</p>
+      </div>
+      {% if error %}<div class='flash' style='background:#fee2e2;border-color:#fca5a5;color:#dc2626;'>{{ error }}</div>{% endif %}
+      <form method='post'>
+        <input type='hidden' name='step' value='1'>
+        <label>Nom d'utilisateur</label>
+        <input name='username' required autocomplete='off' placeholder='Ton identifiant'>
+        <button type='submit' style='width:100%;background:linear-gradient(90deg,#6366f1,#8b5cf6);'>Continuer →</button>
+      </form>
+      <p style='text-align:center;margin-top:14px;'><a href='{{ url_for("login") }}' style='color:var(--text-muted);font-size:13px;'>← Retour à la connexion</a></p>
+    </div>"""
+
+
+def _forgot_step2_content():
+    return """
+    <div class='card' style='max-width:480px;margin:40px auto;border-top:4px solid #6366f1;'>
+      <div style='text-align:center;margin-bottom:20px;'>
+        <span style='font-size:44px;'>🤫</span>
+        <h1 style='background:linear-gradient(135deg,#6366f1,#8b5cf6);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin:10px 0 4px;'>Question secrète</h1>
+        <p class='muted'>Étape 2 sur 3 — Réponds à ta question secrète</p>
+      </div>
+      {% if error %}<div class='flash' style='background:#fee2e2;border-color:#fca5a5;color:#dc2626;'>{{ error }}</div>{% endif %}
+      <div style='background:var(--admin-box);border:1px solid var(--admin-box-border);border-radius:14px;padding:14px 16px;margin-bottom:16px;'>
+        <p style='margin:0;font-weight:700;color:var(--text);'>{{ question }}</p>
+      </div>
+      <form method='post'>
+        <input type='hidden' name='step' value='2'>
+        <input type='hidden' name='username' value='{{ username }}'>
+        <label>Ta réponse <span class='muted small'>(en minuscules)</span></label>
+        <input name='answer' required autocomplete='off' placeholder='Ta réponse...'>
+        <button type='submit' style='width:100%;background:linear-gradient(90deg,#6366f1,#8b5cf6);'>Vérifier →</button>
+      </form>
+    </div>"""
+
+
+def _forgot_step3_content():
+    return """
+    <div class='card' style='max-width:480px;margin:40px auto;border-top:4px solid #10b981;'>
+      <div style='text-align:center;margin-bottom:20px;'>
+        <span style='font-size:44px;'>🔐</span>
+        <h1 style='background:linear-gradient(135deg,#10b981,#06b6d4);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin:10px 0 4px;'>Nouveau mot de passe</h1>
+        <p class='muted'>Étape 3 sur 3 — Choisis un nouveau mot de passe</p>
+      </div>
+      {% if error %}<div class='flash' style='background:#fee2e2;border-color:#fca5a5;color:#dc2626;'>{{ error }}</div>{% endif %}
+      <form method='post'>
+        <input type='hidden' name='step' value='3'>
+        <input type='hidden' name='username' value='{{ username }}'>
+        <label>Nouveau mot de passe</label>
+        <input type='password' name='new_password' required placeholder='Minimum 6 caractères' autocomplete='new-password'>
+        <label>Confirmer le mot de passe</label>
+        <input type='password' name='confirm_password' required autocomplete='new-password'>
+        <button type='submit' style='width:100%;background:linear-gradient(90deg,#10b981,#06b6d4);'>Changer mon mot de passe ✅</button>
+      </form>
+    </div>"""
 
 
 @app.after_request
